@@ -1,0 +1,50 @@
+# ============================================================
+# Laser Printing System - Default Configuration
+# ============================================================
+# Copy this file and modify for your specific setup.
+# Values here match the lab's current hardware configuration.
+# ============================================================
+
+laser:
+  ip: "192.168.244.10"
+  api_base: "/phoebe/v0/Basic"
+  # Default laser parameters applied at startup
+  default_attenuator_percentage: 30
+  default_pp_divider: 1
+  # Delay after each HTTP command to allow laser to stabilize (seconds)
+  command_delay_s: 0.1
+
+stage:
+  ip: "10.0.0.100"
+  port: 701
+  # Axis mapping: 0=X, 1=Y, 2=Z
+  axes: [0, 1, 2]
+  # Axes that require brushless motor commutation at startup
+  commutation_axes: [0, 1]
+  # Default velocity for each axis (mm/s)
+  default_velocity: [1.0, 1.0, 1.0]
+  # Physical travel range per axis (mm)
+  range_mm: [-25.0, 25.0]
+
+synchronization:
+  # Strategy for coordinating laser on/off with stage motion:
+  #   "sequential"       - laser toggles between moves (simple, current behavior)
+  #   "velocity_timed"   - uses pre-calibrated timing to fire laser during
+  #                        constant-velocity region of each move
+  strategy: "velocity_timed"
+  # Speed tolerance band: laser fires only when velocity is within
+  # target_velocity * (1 +/- this fraction)
+  velocity_tolerance_fraction: 0.05
+  # Pre-calibrated acceleration profiles per velocity.
+  # accel_time_s:     time from motion start to reaching target velocity
+  # accel_distance_mm: distance traveled during acceleration phase
+  # These MUST be measured on the actual hardware using motor_profiling experiments.
+  calibration:
+    - velocity_mm_s: 5.0
+      accel_time_s: 0.357
+      accel_distance_mm: 0.79
+
+logging:
+  level: "INFO"
+  # Set to a file path to also log to file (null = console only)
+  file: null
