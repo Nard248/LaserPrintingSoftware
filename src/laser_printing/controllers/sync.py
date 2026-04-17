@@ -1,38 +1,40 @@
+"""Layer 2 synchronizer - coordinated laser + stage motion.
+
+The important timing facts we measured on this setup:
+
+    Laser POST (enable/close)  : ~10-50 ms round trip
+    Laser physical settle      : ~150-350 ms AFTER POST returns
+    Stage GetFPosition         : ~0.18 ms (100x faster than laser)
+
+That means the laser command latency dominates. To fire uniformly across
+the constant-velocity portion of a print line we must:
+
+    1. Send the ON POST *before* the stage reaches the print-start point.
+    2. Wait for the stage acceleration to finish.
+    3. Let the stage traverse the coast region.
+    4. Send the OFF POST *before* the stage reaches the print-end point.
+    5. Wait for deceleration.
+
+This module exposes three strategies:
+
+    - "sequential": move, wait, toggle laser. Simple; laser fires while
+      the stage is stationary between moves. Fine for positioning tests.
+    - "velocity_timed": non-blocking move + calibrated sleeps that account
+      for both acceleration time AND laser pre-fire lead time.
+    - "hardware_trigger": stub for future SPiiPlus TTL trigger support.
+
+Path convention (see `path_generation.coordinates`):
+    path[i] = (point_i, laser_on_during_move_from_point_{i-1}_to_point_i)
+    path[0].laser is ignored; path[0] is treated as initial reposition.
 """
-Synchronized laser-stage execution engine.
-
-This is the most critical module in the system. The core problem:
-
-    When the stage moves from point A to point B, the velocity follows a
-    trapezoidal profile:  accelerate -> constant velocity -> decelerate.
-    The laser must fire ONLY during the constant-velocity region to ensure
-    uniform exposure dose.
-
-    Without synchronization, laser on/off happens between moves (while the
-    stage is stationary), which causes incorrect exposure at line endpoints
-    and makes multi-line STL printing fail.
-
-Two strategies are implemented:
-
-    1. "sequential" - Simple: move, wait, toggle laser. No overlap.
-       Good for testing and non-critical operations (repositioning, etc.).
-
-    2. "velocity_timed" - Uses calibrated timing from acceleration profiling
-       experiments to fire the laser during the constant-velocity window.
-       This is the production strategy for actual printing.
-
-Future strategy (requires hardware investigation):
-    3. "hardware_trigger" - Use the ACS controller's digital output to
-       trigger the laser based on real-time velocity or position thresholds.
-       This would be the ideal solution.
-"""
-
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass
 from typing import Sequence
+
+import numpy as np
 
 from laser_printing.controllers.laser import LaserController
 from laser_printing.controllers.stage import StageController
@@ -42,231 +44,259 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CalibrationPoint:
-    """Measured acceleration profile for a given velocity.
-
-    These values come from the motor_profiling experiment, which measures
-    how long (and how far) the stage takes to reach target velocity.
-    """
+    """Measured acceleration behaviour at a given commanded velocity."""
     velocity_mm_s: float
-    accel_time_s: float        # time from motion start to reaching target velocity
-    accel_distance_mm: float   # distance traveled during acceleration
+    accel_time_s: float
+    accel_distance_mm: float
+
+
+@dataclass
+class LaserLatency:
+    """Measured laser toggle latency (both on and off settle windows).
+
+    The synchronizer uses `on_lead_s` as the time to pre-fire the ON POST
+    before the desired "laser-on at point X" instant. Same for off.
+    """
+    on_lead_s: float = 0.20   # default from measured settle ~200-270 ms
+    off_lead_s: float = 0.20
+    settle_timeout_s: float = 1.0
 
 
 class PrintSynchronizer:
-    """Coordinates laser firing with stage motion for uniform exposure.
+    """Coordinates laser firing with stage motion for uniform exposure."""
 
-    Usage:
-        sync = PrintSynchronizer.from_config(config, laser, stage)
-
-        # Execute a single print line (laser fires during constant-velocity region)
-        sync.execute_print_line(start=[0, 0, 6], end=[10, 0, 6])
-
-        # Execute a full path: list of (point, should_print) tuples
-        sync.execute_path(path)
-    """
-
-    def __init__(self, laser: LaserController, stage: StageController,
-                 strategy: str = "velocity_timed",
-                 velocity_tolerance: float = 0.05,
-                 calibration: list[CalibrationPoint] | None = None):
+    def __init__(
+        self,
+        laser: LaserController,
+        stage: StageController,
+        strategy: str = "velocity_timed",
+        velocity_tolerance: float = 0.05,
+        calibration: Sequence[CalibrationPoint] | None = None,
+        laser_latency: LaserLatency | None = None,
+    ):
         self._laser = laser
         self._stage = stage
         self._strategy = strategy
-        self._velocity_tolerance = velocity_tolerance
-        self._calibration = calibration or []
+        self._velocity_tolerance = float(velocity_tolerance)
+        self._calibration: list[CalibrationPoint] = list(calibration or [])
+        self._calibration.sort(key=lambda c: c.velocity_mm_s)
+        self._lat = laser_latency or LaserLatency()
 
     @classmethod
     def from_config(cls, config: dict, laser: LaserController,
-                    stage: StageController) -> PrintSynchronizer:
-        """Create from the full config dict."""
-        sync_cfg = config["synchronization"]
-        cal_points = [
-            CalibrationPoint(**entry)
-            for entry in sync_cfg.get("calibration", [])
-        ]
+                    stage: StageController) -> "PrintSynchronizer":
+        sync_cfg = config.get("synchronization", {})
+        cal = [CalibrationPoint(**p)
+               for p in sync_cfg.get("calibration", [])]
+        lat = LaserLatency(
+            on_lead_s=sync_cfg.get("laser_on_lead_s", 0.20),
+            off_lead_s=sync_cfg.get("laser_off_lead_s", 0.20),
+            settle_timeout_s=sync_cfg.get("laser_settle_timeout_s", 1.0),
+        )
         return cls(
-            laser=laser,
-            stage=stage,
-            strategy=sync_cfg["strategy"],
+            laser=laser, stage=stage,
+            strategy=sync_cfg.get("strategy", "velocity_timed"),
             velocity_tolerance=sync_cfg.get("velocity_tolerance_fraction", 0.05),
-            calibration=cal_points,
+            calibration=cal,
+            laser_latency=lat,
         )
 
     # -- Public API -------------------------------------------------------
 
     def execute_path(self, path: list[tuple[Sequence[float], bool]]) -> None:
-        """Execute a complete motion path with coordinated laser control.
+        """Execute a canonical path (see module docstring for convention).
 
-        Args:
-            path: List of (point, laser_on) tuples. Each point is [x, y, z].
-                  laser_on=True means the laser should fire DURING the move
-                  TO this point. laser_on=False means reposition with laser off.
+        Path is a list of `(point, laser_on)` tuples where `laser_on` is
+        the laser state during the segment arriving at `point`. `path[0]`
+        is treated as an initial reposition with laser off.
         """
         if not path:
             return
 
-        # Move to the first point with laser off (initial positioning)
         first_point, _ = path[0]
-        logger.info("Moving to start position %s", list(first_point))
-        self._laser.disable_output()
-        self._stage.move_to(first_point)
+        self._laser.off()  # guarantee off before the first move
+        self._stage.move_absolute(first_point, clamp_mm=None)
 
         for i in range(1, len(path)):
-            target_point, should_print = path[i]
-            prev_point = path[i - 1][0]
-
-            if should_print:
-                self._execute_print_move(prev_point, target_point)
+            target, laser_on = path[i]
+            prev = path[i - 1][0]
+            if laser_on:
+                self._print_segment(prev, target)
             else:
-                self._execute_reposition(target_point)
+                self._reposition(target)
+
+        # Always leave the laser off after a path.
+        self._laser.off()
 
     def execute_print_line(self, start: Sequence[float],
                            end: Sequence[float]) -> None:
-        """Execute a single print line: move from start to end with laser on
-        during the constant-velocity region.
-
-        This is the atomic operation that the synchronization strategy affects.
-        """
-        if self._strategy == "sequential":
-            self._print_line_sequential(start, end)
-        elif self._strategy == "velocity_timed":
-            self._print_line_velocity_timed(start, end)
-        else:
-            raise ValueError(f"Unknown synchronization strategy: {self._strategy}")
+        """Print a single line start -> end with the configured strategy."""
+        self._print_segment(start, end)
 
     def add_calibration(self, point: CalibrationPoint) -> None:
-        """Add or update a calibration point from a motor profiling experiment."""
-        # Replace existing calibration for the same velocity if present
-        self._calibration = [
-            c for c in self._calibration
-            if abs(c.velocity_mm_s - point.velocity_mm_s) > 0.01
-        ]
+        """Insert or replace the calibration at `point.velocity_mm_s`."""
+        self._calibration = [c for c in self._calibration
+                             if abs(c.velocity_mm_s - point.velocity_mm_s) > 0.01]
         self._calibration.append(point)
         self._calibration.sort(key=lambda c: c.velocity_mm_s)
-        logger.info("Calibration updated: %s", point)
 
-    # -- Strategy implementations -----------------------------------------
+    # -- Strategy dispatch -----------------------------------------------
 
-    def _execute_print_move(self, from_point: Sequence[float],
-                            to_point: Sequence[float]) -> None:
-        """Move with laser firing during constant-velocity region."""
+    def _print_segment(self, start: Sequence[float], end: Sequence[float]) -> None:
         if self._strategy == "sequential":
-            self._print_line_sequential(from_point, to_point)
+            self._print_sequential(start, end)
         elif self._strategy == "velocity_timed":
-            self._print_line_velocity_timed(from_point, to_point)
+            self._print_velocity_timed(start, end)
+        elif self._strategy == "hardware_trigger":
+            raise NotImplementedError("hardware_trigger strategy not yet wired up")
+        else:
+            raise ValueError(f"Unknown strategy: {self._strategy}")
 
-    def _execute_reposition(self, target: Sequence[float]) -> None:
-        """Move to a new position with laser off (repositioning)."""
-        self._laser.disable_output()
-        self._stage.move_to(target)
+    def _reposition(self, target: Sequence[float]) -> None:
+        self._laser.off()
+        self._stage.move_absolute(target, clamp_mm=None)
 
-    def _print_line_sequential(self, start: Sequence[float],
-                               end: Sequence[float]) -> None:
-        """Sequential strategy: laser on, move, wait, laser off.
+    # -- Strategy implementations ----------------------------------------
 
-        Simple but inaccurate — the laser fires during acceleration and
-        deceleration, causing non-uniform exposure at line endpoints.
-        Acceptable for testing, not for production prints.
+    def _print_sequential(self, start: Sequence[float],
+                          end: Sequence[float]) -> None:
+        """Move with laser on; no timing compensation.
+
+        Laser fires during accel AND decel - non-uniform exposure at line
+        endpoints. Use for positioning tests, not production prints.
         """
-        self._laser.enable_output()
-        self._stage.move_to(end)
-        self._laser.disable_output()
+        self._laser.on()
+        self._stage.move_absolute(end, clamp_mm=None)
+        self._laser.off()
 
-    def _print_line_velocity_timed(self, start: Sequence[float],
-                                   end: Sequence[float]) -> None:
-        """Velocity-timed strategy: fire laser only during constant-velocity window.
+    def _print_velocity_timed(self, start: Sequence[float],
+                              end: Sequence[float]) -> None:
+        """Time the laser to fire only in the constant-velocity window.
 
-        Uses calibrated acceleration timing to compute when to enable and
-        disable the laser during a non-blocking move.
+        The timeline for a single segment of length L at velocity v is:
 
-        Timing diagram for a single line:
-            |-- accel --|-- constant velocity --|-- decel --|
-            ^           ^                       ^           ^
-            motion      laser ON                laser OFF   motion
-            start                                           end
+            motion start .....laser_on POST ..... accel done .......
+                          |<-- on_lead_s -->|<------ coast ------>|...
+                          |                                        |
+                          |         laser OFF POST --->| ....      |...
+                          |                  <- off_lead_s ->|     |
+                          |                                        |
+                          ........................................ motion end
 
-        The accel_time and decel_time come from the calibration table.
-        We assume symmetric acceleration/deceleration profiles.
+        If the calibrated accel_distance does not fit inside L then the
+        stage can't reach full velocity - we fall back to sequential.
         """
-        import numpy as np
-
-        # Compute line length and direction
-        start_arr = np.array(start, dtype=float)
-        end_arr = np.array(end, dtype=float)
+        start_arr = np.asarray(start, dtype=float)
+        end_arr = np.asarray(end, dtype=float)
         line_vec = end_arr - start_arr
         line_length = float(np.linalg.norm(line_vec))
-
         if line_length < 1e-6:
-            logger.warning("Zero-length print line, skipping.")
+            logger.warning("Zero-length print segment; skipping.")
             return
 
-        # Get the current target velocity (X-axis primary)
-        target_velocity = self._stage._velocities[0]
-        accel_time, accel_distance = self._get_accel_params(target_velocity)
+        # Commanded velocity along the path direction:
+        # use axis-wise velocity components projected onto the path.
+        vel_by_axis = np.array(
+            [self._stage.current_velocity_setpoint(ax)
+             for ax in self._stage.axes[:len(line_vec)]],
+            dtype=float,
+        )
+        # Dominant axis velocity along the segment direction:
+        direction = line_vec / line_length
+        # Effective path velocity is min-axis-ratio-limited: if X moves
+        # dx and has velocity vx, the path traverses dx at most at vx.
+        # That's limited by min(|vel_i / dir_i|) over non-zero direction
+        # components.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratios = np.where(np.abs(direction) > 1e-9,
+                              vel_by_axis / np.abs(direction),
+                              np.inf)
+        path_velocity = float(np.min(ratios))
+        if not np.isfinite(path_velocity) or path_velocity <= 0:
+            path_velocity = float(max(vel_by_axis))
 
-        # Compute timing for the constant-velocity region
-        # total_time ≈ accel_time + (line_length - 2*accel_distance)/velocity + accel_time
+        accel_time, accel_distance = self._get_accel_params(path_velocity)
+
         coast_distance = line_length - 2 * accel_distance
         if coast_distance <= 0:
-            # Line is too short for the stage to reach full speed.
-            # The stage will do a triangular velocity profile (accel then immediately decel).
-            # Printing here is unreliable — warn and use sequential fallback.
             logger.warning(
-                "Line length %.3f mm is shorter than acceleration distance "
-                "%.3f mm x 2. Falling back to sequential strategy for this line.",
-                line_length, accel_distance
+                "Line length %.3f mm too short for accel distance %.3f mm "
+                "x 2 at velocity %.2f mm/s; falling back to sequential.",
+                line_length, accel_distance, path_velocity,
             )
-            self._print_line_sequential(start, end)
+            self._print_sequential(start, end)
             return
+        coast_time = coast_distance / path_velocity
 
-        coast_time = coast_distance / target_velocity
+        # Pre-fire ON: start the POST so that by the time the laser
+        # actually turns on, the stage is in the coast region.
+        # Target: laser physically on at t0 + accel_time.
+        # Send POST at t0 + max(0, accel_time - on_lead_s).
+        on_delay = max(0.0, accel_time - self._lat.on_lead_s)
+        # Similarly send OFF POST before the coast region ends.
+        off_after_on = coast_time - (self._lat.on_lead_s - self._lat.off_lead_s)
+        off_after_on = max(0.0, off_after_on)
 
-        # Start non-blocking motion
-        self._stage.move_to_non_blocking(list(end))
+        # Launch the non-blocking motion.
+        self._stage.move_absolute_async(end, clamp_mm=None)
+        t0 = time.perf_counter()
 
-        # Wait through acceleration phase, then fire laser
-        time.sleep(accel_time)
-        self._laser.enable_output()
+        # Wait until it's time to send the ON POST.
+        _precise_sleep(on_delay)
+        self._laser.on()
 
-        # Keep laser on through constant-velocity phase
-        time.sleep(coast_time)
-        self._laser.disable_output()
+        # Wait through coast - but account for the ON POST duration that
+        # already elapsed. on_delay + laser.on() took at least
+        # (on_delay + on_lead_s). Subtract that from coast_time so we
+        # end up firing OFF at the right moment.
+        elapsed = time.perf_counter() - t0
+        target_off_time = accel_time + coast_time - self._lat.off_lead_s
+        _precise_sleep(max(0.0, target_off_time - elapsed))
+        self._laser.off()
 
-        # Wait for motion to complete (deceleration)
+        # Wait for the motion to finish (deceleration phase).
         self._stage.wait_for_motion()
 
-    def _get_accel_params(self, target_velocity: float) -> tuple[float, float]:
-        """Look up or interpolate acceleration time and distance for a velocity.
+    # -- Calibration lookup ----------------------------------------------
 
-        Returns:
-            (accel_time_s, accel_distance_mm) tuple.
+    def _get_accel_params(self, velocity: float) -> tuple[float, float]:
+        """Return (accel_time_s, accel_distance_mm) for the commanded velocity.
+
+        If no calibration exists, fall back to a conservative estimate.
+        If the velocity is outside the calibration range we clamp to the
+        nearest endpoint (no extrapolation).
         """
         if not self._calibration:
             logger.warning(
-                "No calibration data available. Using default estimate: "
-                "accel_time = 0.35s, accel_distance = velocity * 0.35 * 0.5"
+                "No calibration; using fallback accel_time=0.35s, "
+                "accel_distance=0.5*v*t"
             )
-            # Rough estimate: assume constant acceleration over ~0.35s
-            est_time = 0.35
-            est_dist = target_velocity * est_time * 0.5
-            return est_time, est_dist
+            t = 0.35
+            return t, 0.5 * velocity * t
 
-        # Exact match
-        for cal in self._calibration:
-            if abs(cal.velocity_mm_s - target_velocity) < 0.01:
-                return cal.accel_time_s, cal.accel_distance_mm
+        for c in self._calibration:
+            if abs(c.velocity_mm_s - velocity) < 0.01:
+                return c.accel_time_s, c.accel_distance_mm
 
-        # Interpolate between two nearest calibration points
-        import numpy as np
-        vels = [c.velocity_mm_s for c in self._calibration]
-        times = [c.accel_time_s for c in self._calibration]
-        dists = [c.accel_distance_mm for c in self._calibration]
+        vs = [c.velocity_mm_s for c in self._calibration]
+        ts = [c.accel_time_s for c in self._calibration]
+        ds = [c.accel_distance_mm for c in self._calibration]
+        # np.interp clamps at the endpoints, which is what we want.
+        return float(np.interp(velocity, vs, ts)), float(np.interp(velocity, vs, ds))
 
-        interp_time = float(np.interp(target_velocity, vels, times))
-        interp_dist = float(np.interp(target_velocity, vels, dists))
 
-        logger.debug(
-            "Interpolated accel params for %.1f mm/s: time=%.4fs, dist=%.4fmm",
-            target_velocity, interp_time, interp_dist
-        )
-        return interp_time, interp_dist
+# ---- high-resolution sleep --------------------------------------------
+
+def _precise_sleep(dt: float) -> None:
+    """Sleep that is accurate to a few ms on Windows.
+
+    `time.sleep()` has ~15 ms resolution on Windows. We coarse-sleep most
+    of the duration, then busy-wait the last 2 ms.
+    """
+    if dt <= 0:
+        return
+    deadline = time.perf_counter() + dt
+    if dt > 0.003:
+        time.sleep(dt - 0.002)
+    while time.perf_counter() < deadline:
+        pass

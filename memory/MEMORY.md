@@ -1,0 +1,1 @@
+- [Stage home position](home_position.md) — stage always returns to [0,0,0] mm; do not use connect-time position as home

@@ -1,15 +1,34 @@
 """
 Design of Experiments (DOE) utilities.
 
-Wraps pyDOE2 to generate full-factorial experiment matrices from
-parameter DataFrames, and provides helpers for parameter look-up.
+Generates full-factorial experiment matrices from parameter DataFrames.
 """
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 import pandas as pd
-from pyDOE2 import fullfact
+
+
+def fullfact(levels: list[int]) -> np.ndarray:
+    """Full-factorial design matrix.
+
+    Drop-in replacement for `pyDOE2.fullfact` (pyDOE2 still imports the
+    removed `imp` module on Python 3.12, so we roll our own).
+
+    Args:
+        levels: number of levels for each factor.
+
+    Returns:
+        Array of shape (prod(levels), len(levels)) where each row is a
+        combination of level indices (in column-major order).
+    """
+    ranges = [range(n) for n in levels]
+    combos = list(itertools.product(*reversed(ranges)))
+    arr = np.array([list(reversed(c)) for c in combos], dtype=float)
+    return arr
 
 
 class ExperimentDesign:

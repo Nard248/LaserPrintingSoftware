@@ -1,6 +1,20 @@
-"""Hardware controllers for laser and motion stage."""
+"""Layer 1 hardware controllers.
 
-from laser_printing.controllers.laser import LaserController
-from laser_printing.controllers.stage import StageController
+    LaserController - on/off, attenuator, pp_divider; polled settle.
+    StageController - move_absolute/relative, jog, clamp-protected; home=[0,0,0].
+    PrintSynchronizer - Layer 2 coordinator, imported from .sync.
+"""
+from laser_printing.controllers.laser import LaserController, ToggleMetrics
+from laser_printing.controllers.stage import (
+    HOME_POSITION,
+    StageController,
+    StageSafetyError,
+)
 
-__all__ = ["LaserController", "StageController"]
+__all__ = [
+    "LaserController",
+    "ToggleMetrics",
+    "StageController",
+    "StageSafetyError",
+    "HOME_POSITION",
+]

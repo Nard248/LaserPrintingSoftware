@@ -235,29 +235,28 @@ def _snake_order(
 
 
 def _assign_laser_states(ordered_points: list[np.ndarray]) -> PathWithLaser:
-    """Assign laser ON/OFF state to each point in the path.
+    """Assign laser state to each segment using the canonical end-of-segment
+    convention: ``path[i].laser`` = laser state during the move FROM
+    ``ordered_points[i-1]`` TO ``ordered_points[i]``.
 
-    The rule: laser is ON when moving between two points that share the
-    same Y AND Z coordinates (horizontal scan motion). Laser is OFF when
-    Y or Z changes (repositioning to a new scan line).
+    The rule used here: laser is ON when the segment moves purely along X
+    (Y and Z unchanged), otherwise OFF (repositioning between scan lines).
 
-    The last point is always laser OFF (return to start).
+    `path[0].laser` is always False by convention (the executor treats
+    path[0] as an initial reposition and ignores the flag).
     """
     path: PathWithLaser = []
-    for i in range(len(ordered_points) - 1):
-        current = ordered_points[i]
-        next_pt = ordered_points[i + 1]
+    # path[0]: initial reposition point, laser off.
+    p0 = ordered_points[0]
+    path.append(((float(p0[0]), float(p0[1]), float(p0[2])), False))
 
-        # Same Y and Z means we're scanning along X → laser ON
-        same_y = abs(current[1] - next_pt[1]) < 1e-6
-        same_z = abs(current[2] - next_pt[2]) < 1e-6
-        laser_on = same_y and same_z
-
-        point_tuple = (float(current[0]), float(current[1]), float(current[2]))
-        path.append((point_tuple, laser_on))
-
-    # Final point: laser always off
-    last = ordered_points[-1]
-    path.append(((float(last[0]), float(last[1]), float(last[2])), False))
+    # path[i] for i>=1: state during segment i-1 -> i.
+    for i in range(1, len(ordered_points)):
+        prev = ordered_points[i - 1]
+        curr = ordered_points[i]
+        same_y = abs(prev[1] - curr[1]) < 1e-6
+        same_z = abs(prev[2] - curr[2]) < 1e-6
+        laser_on = bool(same_y and same_z)
+        path.append(((float(curr[0]), float(curr[1]), float(curr[2])), laser_on))
 
     return path

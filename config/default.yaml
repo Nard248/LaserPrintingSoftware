@@ -8,37 +8,46 @@
 laser:
   ip: "192.168.244.10"
   api_base: "/phoebe/v0/Basic"
-  # Default laser parameters applied at startup
-  default_attenuator_percentage: 30
-  default_pp_divider: 1
-  # Delay after each HTTP command to allow laser to stabilize (seconds)
-  command_delay_s: 0.1
+  # Maximum time to wait for a toggle to settle (seconds).
+  settle_timeout_s: 1.0
+  # Poll interval while waiting for settle (0 = spin).
+  poll_interval_s: 0.01
 
 stage:
   ip: "10.0.0.100"
   port: 701
-  # Axis mapping: 0=X, 1=Y, 2=Z
+  # Axis mapping: 0=X, 1=Y, 2=Z.
   axes: [0, 1, 2]
-  # Axes that require brushless motor commutation at startup
+  # Axes that require brushless motor commutation at startup.
   commutation_axes: [0, 1]
-  # Default velocity for each axis (mm/s)
+  # Default per-axis velocity at connect (mm/s).
   default_velocity: [1.0, 1.0, 1.0]
-  # Physical travel range per axis (mm)
+  # Physical travel range per axis (mm).
   range_mm: [-25.0, 25.0]
+  # Default per-axis safety clamp on any move_absolute/relative (mm).
+  # Individual calls can override via `clamp_mm=...`.
+  max_step_mm: 5.0
 
 synchronization:
   # Strategy for coordinating laser on/off with stage motion:
-  #   "sequential"       - laser toggles between moves (simple, current behavior)
-  #   "velocity_timed"   - uses pre-calibrated timing to fire laser during
+  #   "sequential"       - laser toggles between moves (simple test only)
+  #   "velocity_timed"   - pre-calibrated timing; laser fires during the
   #                        constant-velocity region of each move
+  #   "hardware_trigger" - (reserved) SPiiPlus TTL out triggers the laser
   strategy: "velocity_timed"
-  # Speed tolerance band: laser fires only when velocity is within
-  # target_velocity * (1 +/- this fraction)
+  # Speed-tolerance band used by MotionProfiling to detect "in coast region"
   velocity_tolerance_fraction: 0.05
-  # Pre-calibrated acceleration profiles per velocity.
+  # Laser pre-fire leads (seconds) - measured ~200-270 ms settle on this
+  # hardware. The synchronizer sends the ON POST `laser_on_lead_s` before
+  # the desired physical-on instant, similarly for OFF.
+  laser_on_lead_s: 0.20
+  laser_off_lead_s: 0.20
+  laser_settle_timeout_s: 1.0
+  # Acceleration calibration - one entry per measured velocity.
   # accel_time_s:     time from motion start to reaching target velocity
   # accel_distance_mm: distance traveled during acceleration phase
-  # These MUST be measured on the actual hardware using motor_profiling experiments.
+  # Measure these with scripts or MotionProfiling; the 5 mm/s entry below
+  # is the long-standing lab value (from async_motor.py notes).
   calibration:
     - velocity_mm_s: 5.0
       accel_time_s: 0.357
