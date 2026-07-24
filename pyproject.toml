@@ -6,7 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "laser-printing"
 version = "0.1.0"
 description = "Control software for 2PP laser printing and ablation system"
-requires-python = ">=3.12,<3.13"
+# 3.12 is REQUIRED on the rig computer (the ACS SPiiPlusPython wheel is
+# cp312); 3.13 is allowed for simulation-mode development off the rig.
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "numpy>=2.1",
     "trimesh>=4.5",
@@ -17,12 +19,19 @@ dependencies = [
     "pandas>=2.2",
     "pyyaml>=6.0",
     "aiohttp>=3.9",
+    # labgate API platform
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
 ]
+
+[project.scripts]
+labgate-serve = "labgate.api.app:main"
 # NOTE: SPiiPlusPython is installed from a local wheel shipped with the ACS
 # SPiiPlus ADK Suite; it is not on PyPI. See README for install steps.
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-cov"]
+dev = ["pytest", "pytest-cov", "httpx"]
 notebook = ["jupyterlab", "ipykernel", "ipywidgets"]
 
 [tool.setuptools.packages.find]
