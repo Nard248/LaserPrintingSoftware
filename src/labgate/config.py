@@ -48,15 +48,23 @@ class LabgateConfig(BaseModel):
         if path is None:
             return cls()
         raw = yaml.safe_load(Path(path).read_text()) or {}
-        section = raw.get("labgate", {})
+        section = raw.get("labgate") or {}
         cfg = cls(**section)
-        cfg.hardware = {k: raw[k] for k in ("stage", "laser", "synchronization") if k in raw}
-        stage = raw.get("stage", {})
+        cfg.hardware = {
+            k: (raw.get(k) or {}) for k in ("stage", "laser", "synchronization") if k in raw
+        }
+        stage = raw.get("stage") or {}
         if "range_mm" in stage:
             cfg.bounds.stage.range_mm = tuple(stage["range_mm"])
-        sync = raw.get("synchronization", {})
-        for point in sync.get("calibration", []):
-            cfg.bounds.laser.accel_distance_mm = point.get(
-                "accel_distance_mm", cfg.bounds.laser.accel_distance_mm
+        if "max_step_mm" in stage:
+            cfg.bounds.stage.max_step_mm = float(stage["max_step_mm"])
+        sync = raw.get("synchronization") or {}
+        calibration = sync.get("calibration") or []
+        if calibration:
+            # Conservative: warn against the LARGEST accel distance measured,
+            # so the short-line warning holds at every calibrated velocity.
+            cfg.bounds.laser.accel_distance_mm = max(
+                float(p.get("accel_distance_mm", cfg.bounds.laser.accel_distance_mm))
+                for p in calibration
             )
         return cfg

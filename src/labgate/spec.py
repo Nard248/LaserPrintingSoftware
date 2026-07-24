@@ -10,56 +10,64 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-Point3 = tuple[float, float, float]
+# This model IS the trust boundary: reject anything not explicitly declared
+# (extra fields) and any non-finite number (Infinity/NaN would sail through
+# range checks like `lo <= v <= hi`).
+Finite = Annotated[float, Field(allow_inf_nan=False)]
+Point3 = tuple[Finite, Finite, Finite]
 
 
-class SetLaserPower(BaseModel):
+class _StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class SetLaserPower(_StrictModel):
     op: Literal["set_laser_power"] = "set_laser_power"
-    attenuator_percent: float
+    attenuator_percent: Finite
     pp_divider: int = 1
 
 
-class WriteLine(BaseModel):
+class WriteLine(_StrictModel):
     op: Literal["write_line"] = "write_line"
     start_mm: Point3
     end_mm: Point3
-    velocity_mm_s: float
+    velocity_mm_s: Finite
     repetitions: int = 1
 
 
-class WriteArray(BaseModel):
+class WriteArray(_StrictModel):
     op: Literal["write_array"] = "write_array"
-    x_start_mm: float
-    x_end_mm: float
-    y_start_mm: float
-    y_pitch_mm: float
+    x_start_mm: Finite
+    x_end_mm: Finite
+    y_start_mm: Finite
+    y_pitch_mm: Finite
     line_count: int
-    z_mm: float
-    velocity_mm_s: float
+    z_mm: Finite
+    velocity_mm_s: Finite
     repetitions: int = 1
 
 
-class MoveStage(BaseModel):
+class MoveStage(_StrictModel):
     op: Literal["move_stage"] = "move_stage"
     target_mm: Point3
 
 
-class SetWhiteLight(BaseModel):
+class SetWhiteLight(_StrictModel):
     op: Literal["set_white_light"] = "set_white_light"
     on: bool
 
 
-class CaptureImage(BaseModel):
+class CaptureImage(_StrictModel):
     op: Literal["capture_image"] = "capture_image"
     label: str
     wl_on: bool = True
 
 
-class Wait(BaseModel):
+class Wait(_StrictModel):
     op: Literal["wait"] = "wait"
-    seconds: float
+    seconds: Finite
 
 
 Operation = Annotated[
@@ -68,7 +76,7 @@ Operation = Annotated[
 ]
 
 
-class ExperimentSpec(BaseModel):
+class ExperimentSpec(_StrictModel):
     spec_version: Literal["1.0"] = "1.0"
     title: str
     description: str = ""

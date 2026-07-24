@@ -139,10 +139,12 @@ class ValidationEngine:
                     check=f"op[{i}].wl_during_exposure", ok=False,
                     detail="white light must be off during laser exposure"))
             if isinstance(op, CaptureImage) and op.wl_on and not wl_on:
-                # informational: executor turns WL on for the capture
+                # Informational only: the executor switches WL on for the
+                # capture and RESTORES it afterwards (executor._dispatch),
+                # so tracked wl_on stays correct for later exposure checks.
                 out.append(CheckResult(
                     check=f"op[{i}].wl_auto", ok=True, severity="warning",
-                    detail="white light will be switched on automatically for capture"))
+                    detail="white light will be switched on for the capture and restored after"))
         if not out:
             out.append(CheckResult(check="ordering", ok=True, detail="operation order consistent"))
         return out
