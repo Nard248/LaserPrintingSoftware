@@ -126,16 +126,18 @@ class StageTcp:
         SPiiPlusPython wheel; raises RuntimeError if no variant exists so the
         caller can log it.
         """
+        # Argument shape follows this file's proven (..., wait, failure_check)
+        # convention — e.g. EnableM(handle, axes, sp.SYNCHRONOUS, True).
         for name in ("KillM", "HaltM"):
             fn = getattr(sp, name, None)
             if fn is not None:
-                fn(self.handle, terminated(axes), True)
+                fn(self.handle, terminated(axes), sp.SYNCHRONOUS, True)
                 return
         for name in ("Kill", "Halt"):
             fn = getattr(sp, name, None)
             if fn is not None:
                 for axis in axes:
-                    fn(self.handle, axis, True)
+                    fn(self.handle, axis, sp.SYNCHRONOUS, True)
                 return
         raise RuntimeError(
             "No halt/kill function found in SPiiPlusPython (tried KillM, "

@@ -135,6 +135,8 @@ def test_rig_adapters_pass_config_section(cfg, monkeypatch):
     seen = {}
 
     class FakeController:
+        is_on = False
+
         def connect(self):
             seen["connected"] = True
 

@@ -121,16 +121,18 @@ class PrintSynchronizer:
         # 5 mm typo clamp and fault any longer repositioning or line.
         self._stage.move_absolute(first_point, clamp_mm=self._stage.range_span_mm)
 
-        for i in range(1, len(path)):
-            target, laser_on = path[i]
-            prev = path[i - 1][0]
-            if laser_on:
-                self._print_segment(prev, target)
-            else:
-                self._reposition(target)
-
-        # Always leave the laser off after a path.
-        self._laser.off()
+        try:
+            for i in range(1, len(path)):
+                target, laser_on = path[i]
+                prev = path[i - 1][0]
+                if laser_on:
+                    self._print_segment(prev, target)
+                else:
+                    self._reposition(target)
+        finally:
+            # Always leave the laser off after a path — including when a
+            # segment faults mid-path. The beam must never outlive the path.
+            self._laser.off()
 
     def execute_print_line(self, start: Sequence[float],
                            end: Sequence[float]) -> None:
@@ -170,8 +172,11 @@ class PrintSynchronizer:
         endpoints. Use for positioning tests, not production prints.
         """
         self._laser.on()
-        self._stage.move_absolute(end, clamp_mm=self._stage.range_span_mm)
-        self._laser.off()
+        try:
+            self._stage.move_absolute(end, clamp_mm=self._stage.range_span_mm)
+        finally:
+            # a faulted move must never leave the beam on a stationary sample
+            self._laser.off()
 
     def _print_velocity_timed(self, start: Sequence[float],
                               end: Sequence[float]) -> None:
@@ -248,18 +253,22 @@ class PrintSynchronizer:
         # Wait until it's time to send the ON POST.
         _precise_sleep(on_delay)
         self._laser.on()
+        try:
+            # Wait through coast - but account for the ON POST duration that
+            # already elapsed. on_delay + laser.on() took at least
+            # (on_delay + on_lead_s). Subtract that from coast_time so we
+            # end up firing OFF at the right moment.
+            elapsed = time.perf_counter() - t0
+            target_off_time = accel_time + coast_time - self._lat.off_lead_s
+            _precise_sleep(max(0.0, target_off_time - elapsed))
+            self._laser.off()
 
-        # Wait through coast - but account for the ON POST duration that
-        # already elapsed. on_delay + laser.on() took at least
-        # (on_delay + on_lead_s). Subtract that from coast_time so we
-        # end up firing OFF at the right moment.
-        elapsed = time.perf_counter() - t0
-        target_off_time = accel_time + coast_time - self._lat.off_lead_s
-        _precise_sleep(max(0.0, target_off_time - elapsed))
-        self._laser.off()
-
-        # Wait for the motion to finish (deceleration phase).
-        self._stage.wait_for_motion()
+            # Wait for the motion to finish (deceleration phase).
+            self._stage.wait_for_motion()
+        finally:
+            # If the timed off() or the motion wait raised, the beam state is
+            # uncertain — force it off (cache was poisoned, so this re-POSTs).
+            self._laser.off()
 
     # -- Calibration lookup ----------------------------------------------
 
@@ -283,9 +292,27 @@ class PrintSynchronizer:
                 return c.accel_time_s, c.accel_distance_mm
 
         vs = [c.velocity_mm_s for c in self._calibration]
+        if velocity < vs[0] - 0.01 or velocity > vs[-1] + 0.01:
+            # Outside the calibrated range: silently clamping to the nearest
+            # endpoint mistimes the firing window (e.g. 1 mm/s treated as
+            # 5 mm/s fires during acceleration). Scale physically instead:
+            # assume constant accel a = v_cal/t_cal from the nearest point,
+            # then t = v/a and d = v^2/(2a) — exact for trapezoidal profiles.
+            nearest = self._calibration[0] if velocity < vs[0] else self._calibration[-1]
+            accel = nearest.velocity_mm_s / nearest.accel_time_s
+            t = velocity / accel
+            d = velocity ** 2 / (2 * accel)
+            logger.warning(
+                "Velocity %.2f mm/s outside calibrated range [%.2f, %.2f]; "
+                "scaling from the %.2f mm/s point (accel_time=%.3fs, "
+                "accel_dist=%.3fmm). Add a calibration entry via "
+                "MotionProfiling for exact timing.",
+                velocity, vs[0], vs[-1], nearest.velocity_mm_s, t, d,
+            )
+            return t, d
+
         ts = [c.accel_time_s for c in self._calibration]
         ds = [c.accel_distance_mm for c in self._calibration]
-        # np.interp clamps at the endpoints, which is what we want.
         return float(np.interp(velocity, vs, ts)), float(np.interp(velocity, vs, ds))
 
 

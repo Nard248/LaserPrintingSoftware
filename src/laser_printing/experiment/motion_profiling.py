@@ -110,8 +110,9 @@ class MotionProfiling(BaseExperiment):
                                        clamp_mm=self.stage.range_span_mm)
         data = self.stage.record_profile(
             self.n_samples, self.sample_period,
-            variables="FVEL(0), FPOS(0)", array_name=self._array_name,
-            wait=True,
+            variables="FVEL(0), FPOS(0)",
+            array_name=f"{self._array_name}_{index}",  # fresh buffer per condition
+            wait=True, servo_cycle_s=self.servo_cycle_s,
         )
         vel_array = data[0, :]
         pos_array = data[1, :]

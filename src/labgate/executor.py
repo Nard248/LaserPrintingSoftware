@@ -91,15 +91,22 @@ class ExecutionEngine:
             thread.join(timeout_s)
 
     def shutdown(self) -> None:
-        """Best-effort: abort any live run and disconnect all devices."""
+        """Best-effort: abort any live run, then safe-state ALL devices in
+        the fixed laser-first order, then disconnect (same order) — the
+        stage must never home under a possibly-live beam."""
         for plan_id, flag in list(self._abort_flags.items()):
             flag.set()
             self.wait(plan_id, timeout_s=10.0)
-        for adapter in self._registry.adapters():
+        ordered = self._ordered_adapters()
+        for adapter in ordered:
             try:
                 adapter.safe_state()
-                adapter.disconnect()
             except Exception:  # noqa: BLE001 — shutdown must not cascade
+                pass
+        for adapter in ordered:
+            try:
+                adapter.disconnect()
+            except Exception:  # noqa: BLE001
                 pass
 
     # ------------------------------------------------------------------
@@ -155,14 +162,17 @@ class ExecutionEngine:
                 self._threads.pop(plan_id, None)
 
     # ------------------------------------------------------------------
-    def _safe_state_all(self, results: RunResults) -> None:
-        """Safe-state order is fixed: laser first, then stage, then WL."""
+    def _ordered_adapters(self):
+        """Adapters in the fixed safe-state order: laser, stage, WL, camera."""
         order = ["laser", "stage", "white_light", "camera"]
-        adapters = sorted(
+        return sorted(
             self._registry.adapters(),
             key=lambda a: order.index(a.kind) if a.kind in order else 99,
         )
-        for adapter in adapters:
+
+    def _safe_state_all(self, results: RunResults) -> None:
+        """Safe-state order is fixed: laser first, then stage, then WL."""
+        for adapter in self._ordered_adapters():
             try:
                 adapter.safe_state()
             except Exception as exc:  # noqa: BLE001 — log, keep going down the list

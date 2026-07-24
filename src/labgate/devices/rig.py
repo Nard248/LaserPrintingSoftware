@@ -109,6 +109,12 @@ class RigLaser(DeviceAdapter):
         return SimLaser(self._cfg, self.device_id).capabilities()
 
     def state(self) -> DeviceState:
+        if self._controller is not None:
+            # Live cached value from the controller — SyncExposure toggles the
+            # beam through the controller directly, bypassing this adapter.
+            live = self._controller.is_on
+            if live is not None:
+                self.output_on = bool(live)
         return DeviceState(device_id=self.device_id, kind=self.kind,
                            connected=self._controller is not None,
                            detail={"output_on": self.output_on})
@@ -121,15 +127,14 @@ class RigLaser(DeviceAdapter):
         controller = LaserController.from_config(self._cfg.hardware.get("laser", {}))
         controller.connect()  # reads real hardware state into the cache
         self._controller = controller
-        self.output_on = bool(getattr(controller, "state", None) and
-                              getattr(controller.state, "output_on", False))
+        self.output_on = bool(controller.is_on)
 
     def disconnect(self) -> None:
         if self._controller is None:
             return
         controller, self._controller = self._controller, None
         try:
-            controller.off()
+            controller.off(force=True)
         except Exception:  # noqa: BLE001 — disconnect is best-effort cleanup
             pass
         self.output_on = False
@@ -137,12 +142,16 @@ class RigLaser(DeviceAdapter):
     def safe_state(self) -> None:
         """Force output off. RAISES if the laser cannot be confirmed off —
         the executor records it; independent hardware interlocks (L0) remain
-        the last line of defense."""
+        the last line of defense.
+
+        force=True is essential: after a failed on() the controller cache is
+        unknown/stale and a plain off() could short-circuit without POSTing.
+        """
         if self._controller is None:
             self.output_on = False
             return
         try:
-            self._controller.off()
+            self._controller.off(force=True)
         except Exception as exc:
             raise DeviceError(f"LASER MAY STILL BE ON — off() failed: {exc}") from exc
         self.output_on = False
