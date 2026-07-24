@@ -77,15 +77,17 @@ class DryRunEstimator:
                 line = abs(op.x_end_mm - op.x_start_mm)
                 y_end = op.y_start_mm + (op.line_count - 1) * op.y_pitch_mm
                 n = op.line_count * op.repetitions
-                duration = n * (line / op.velocity_mm_s + 2 * settle) \
-                    + op.line_count * (op.y_pitch_mm / 1.0)
-                dist_mm += n * line
+                start = (op.x_start_mm, op.y_start_mm, op.z_mm)
+                travel = seg(pos, start)
+                y_steps = (op.line_count - 1) * abs(op.y_pitch_mm)
+                duration = travel / 1.0 + n * (line / op.velocity_mm_s + 2 * settle) \
+                    + y_steps / 1.0
+                dist_mm += travel + n * line + y_steps
                 exposures += n
-                points += [
-                    (op.x_start_mm, op.y_start_mm, op.z_mm),
-                    (op.x_end_mm, y_end, op.z_mm),
-                ]
-                pos = (op.x_end_mm, y_end, op.z_mm)
+                points += [start, (op.x_end_mm, y_end, op.z_mm)]
+                # each line ends where its repetitions leave the stage
+                end_x = op.x_end_mm if op.repetitions % 2 else op.x_start_mm
+                pos = (end_x, y_end, op.z_mm)
                 detail = f"{op.line_count} lines x {op.repetitions} reps, pitch {op.y_pitch_mm} mm"
             elif isinstance(op, Wait):
                 duration = op.seconds

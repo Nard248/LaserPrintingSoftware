@@ -27,11 +27,17 @@ from ..audit import AuditLog
 from ..auth import Identity, Role, TokenStore, require_role
 from ..config import LabgateConfig
 from ..dryrun import DryRunEstimator
-from ..errors import AuthError, DeviceError, LabgateError, TransitionError
+from ..errors import (
+    AuthError,
+    DeviceError,
+    LabgateError,
+    TransitionError,
+    UnknownPlanError,
+)
 from ..executor import ExecutionEngine
 from ..lifecycle import PlanStore
 from ..registry import CapabilityRegistry
-from ..results import RunResults
+from ..results import RunResults, UnknownArtifactError
 from ..spec import ExperimentSpec
 from ..validation import ValidationEngine
 from .schemas import PlanSummary, SubmitPlanRequest
@@ -100,11 +106,19 @@ def create_app(cfg: LabgateConfig | None = None) -> FastAPI:
         status = 500
         if isinstance(exc, AuthError):
             status = 403
+        elif isinstance(exc, UnknownPlanError):
+            status = 404
         elif isinstance(exc, TransitionError):
-            status = 409 if "unknown plan" not in str(exc) else 404
+            status = 409
         elif isinstance(exc, DeviceError):
             status = 502
         return JSONResponse(status_code=status, content={"detail": str(exc)})
+
+    def require_read(identity: Identity) -> None:
+        """Reads need SOME platform role — a token with no roles sees nothing."""
+        if not (identity.has_role(Role.OPERATOR) or identity.has_role(Role.APPROVER)):
+            raise AuthError(
+                f"user '{identity.user_id}' has no role granting read access")
 
     # ------------------------------------------------------------ routes
     @app.get("/health")
@@ -113,10 +127,12 @@ def create_app(cfg: LabgateConfig | None = None) -> FastAPI:
 
     @app.get("/capabilities")
     def capabilities(identity: Identity = Depends(current_identity)) -> dict:
+        require_read(identity)
         return platform.registry.snapshot()
 
     @app.get("/devices")
     def devices(identity: Identity = Depends(current_identity)) -> list[dict]:
+        require_read(identity)
         return [s.model_dump() for s in platform.registry.device_states()]
 
     @app.post("/plans", status_code=201)
@@ -135,16 +151,18 @@ def create_app(cfg: LabgateConfig | None = None) -> FastAPI:
 
     @app.get("/plans")
     def list_plans(identity: Identity = Depends(current_identity)) -> list[PlanSummary]:
+        require_read(identity)
         return [PlanSummary.from_record(r) for r in platform.store.list()]
 
     @app.get("/plans/{plan_id}")
     def get_plan(plan_id: str, identity: Identity = Depends(current_identity)) -> dict:
-        record = platform.store.get(plan_id)
-        return record.model_dump()
+        require_read(identity)
+        return platform.store.snapshot(plan_id).model_dump()
 
     @app.post("/plans/{plan_id}/dry-run")
     def dry_run(plan_id: str, identity: Identity = Depends(current_identity)) -> dict:
-        record = platform.store.get(plan_id)
+        require_read(identity)
+        record = platform.store.snapshot(plan_id)
         return platform.estimator.estimate(record.spec).model_dump()
 
     @app.post("/plans/{plan_id}/approve")
@@ -168,6 +186,7 @@ def create_app(cfg: LabgateConfig | None = None) -> FastAPI:
 
     @app.get("/plans/{plan_id}/results")
     def results(plan_id: str, identity: Identity = Depends(current_identity)) -> dict:
+        require_read(identity)
         platform.store.get(plan_id)  # 404 for unknown plans
         run = RunResults(Path(platform.cfg.storage_dir), plan_id)
         return {"manifest": run.manifest(), "events": run.events()}
@@ -176,12 +195,20 @@ def create_app(cfg: LabgateConfig | None = None) -> FastAPI:
     def artifact(
         plan_id: str, name: str, identity: Identity = Depends(current_identity),
     ):
+        require_read(identity)
         platform.store.get(plan_id)
         run = RunResults(Path(platform.cfg.storage_dir), plan_id)
-        path = run.artifact_path(name)
+        try:
+            path = run.artifact_path(name)
+        except UnknownArtifactError:
+            raise HTTPException(404, f"no artifact named '{name}'") from None
         if not path.exists():
             raise HTTPException(404, f"no artifact named '{name}'")
         return FileResponse(path)
+
+    @app.on_event("shutdown")
+    def _shutdown() -> None:
+        platform.engine.shutdown()
 
     return app
 

@@ -66,4 +66,9 @@ class DeviceAdapter(ABC):
 
     @abstractmethod
     def safe_state(self) -> None:
-        """Drive the device to its defined safe state. Must never raise."""
+        """Drive the device to its defined safe state.
+
+        MAY raise if the safe state cannot be confirmed — callers (the
+        execution engine) catch, record, and continue down the safe-state
+        order. Never silently report safe when the device may not be.
+        """

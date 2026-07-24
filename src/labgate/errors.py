@@ -18,6 +18,10 @@ class TransitionError(LabgateError):
     """An operation was attempted in an illegal plan state."""
 
 
+class UnknownPlanError(TransitionError):
+    """The referenced plan does not exist (maps to HTTP 404, not 409)."""
+
+
 class AuthError(LabgateError):
     """Authentication or authorization failure."""
 

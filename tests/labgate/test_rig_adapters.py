@@ -42,12 +42,14 @@ def test_rig_laser_drives_controller(cfg):
     assert not adapter.output_on
 
 
-def test_rig_laser_safe_state_never_raises(cfg):
+def test_rig_laser_safe_state_raises_when_off_fails(cfg):
+    # Contract (post-review): safe_state must NOT silently report safe when
+    # the laser may still be on — it raises and the executor records it.
     adapter = rig.RigLaser(cfg)
     adapter._controller = MagicMock()
     adapter._controller.off.side_effect = RuntimeError("network down")
-    adapter.safe_state()  # must swallow
-    assert not adapter.output_on
+    with pytest.raises(DeviceError):
+        adapter.safe_state()
 
 
 def test_stubs_refuse_connect(cfg):

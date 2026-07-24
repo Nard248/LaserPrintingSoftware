@@ -20,7 +20,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from .auth import Identity
-from .errors import AuthError, TransitionError
+from .errors import AuthError, TransitionError, UnknownPlanError
 from .ids import new_id
 from .spec import ExperimentSpec
 from .validation import ValidationReport
@@ -100,10 +100,19 @@ class PlanStore:
         try:
             return self._plans[plan_id]
         except KeyError:
-            raise TransitionError(f"unknown plan: {plan_id}") from None
+            raise UnknownPlanError(f"unknown plan: {plan_id}") from None
+
+    def snapshot(self, plan_id: str) -> PlanRecord:
+        """Deep copy under the lock — safe to serialize while a run mutates."""
+        with self._lock:
+            return self.get(plan_id).model_copy(deep=True)
 
     def list(self) -> list[PlanRecord]:
-        return sorted(self._plans.values(), key=lambda r: r.created_at, reverse=True)
+        with self._lock:
+            return sorted(
+                (r.model_copy(deep=True) for r in self._plans.values()),
+                key=lambda r: r.created_at, reverse=True,
+            )
 
     def transition(self, plan_id: str, to_state: PlanState, actor: str) -> PlanRecord:
         with self._lock:
