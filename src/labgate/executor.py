@@ -18,6 +18,7 @@ from pathlib import Path
 from .audit import AuditLog
 from .config import LabgateConfig
 from .errors import TransitionError
+from .exposure import ExposureBackend, SimExposure
 from .lifecycle import PlanState, PlanStore
 from .registry import CapabilityRegistry
 from .results import RunResults
@@ -43,11 +44,14 @@ class ExecutionEngine:
         store: PlanStore,
         audit: AuditLog,
         cfg: LabgateConfig,
+        exposure: ExposureBackend | None = None,
     ) -> None:
         self._registry = registry
         self._store = store
         self._audit = audit
         self._cfg = cfg
+        self._exposure = exposure or SimExposure(
+            registry.by_kind("stage"), registry.by_kind("laser"))
         self._device_locks: dict[str, threading.Lock] = {}
         self._abort_flags: dict[str, threading.Event] = {}
         self._threads: dict[str, threading.Thread] = {}
@@ -217,22 +221,15 @@ class ExecutionEngine:
 
     def _write_line(self, stage, laser, start_mm, end_mm, velocity_mm_s,
                     repetitions, abort_flag: threading.Event) -> None:
-        """Synchronized exposure. In sim: explicit on/move/off sequence.
+        """Expose one line via the configured backend (sim or synchronized).
 
-        On the rig this is where PrintSynchronizer.execute_path slots in —
-        the sync problem stays quarantined in this one deterministic method
-        (see architecture proposal §5). Abort is honored between repetitions;
-        a single line traverse is the atomic unit of exposure.
+        The sync problem stays quarantined behind the ExposureBackend seam
+        (see labgate/exposure.py and architecture proposal §5). Abort is
+        honored between repetitions; a single line traverse is the atomic
+        unit of exposure.
         """
         with self._lock_for(stage.device_id), self._lock_for(laser.device_id):
-            stage.move_absolute(start_mm)  # reposition, laser off
-            current, target = start_mm, end_mm
-            for _ in range(repetitions):
-                if abort_flag.is_set():
-                    raise _AbortRequested("between line repetitions")
-                laser.on()
-                try:
-                    stage.move_absolute(target, velocity_mm_s=velocity_mm_s)
-                finally:
-                    laser.off()  # never leave the beam on if the move faults
-                current, target = target, current
+            completed = self._exposure.write_line(
+                start_mm, end_mm, velocity_mm_s, repetitions, abort_flag)
+        if not completed:
+            raise _AbortRequested("between line repetitions")

@@ -94,7 +94,20 @@ Open questions for you (also in the requirements doc, Q-A1..Q-P4):
    binds to localhost by default; exposing it beyond the lab LAN needs a
    deliberate decision + TLS).
 
-## 5. Error semantics
+## 5. Ready-made integration aids
+
+- **Working demo of the whole loop:** `python examples/experimentalist_demo.py`
+  plays both agent roles against an in-process simulation platform — zero
+  setup. Point it at a live server with `--base-url` + tokens to smoke-test
+  a real deployment.
+- **MCP server (if your agents speak MCP, Q-P2):** `pip install -e ".[mcp]"`,
+  then `LABGATE_URL=... LABGATE_TOKEN=... labgate-mcp` exposes the lifecycle
+  as MCP tools (`get_capabilities`, `submit_plan`, `dry_run`, `approve_plan`,
+  `execute_plan`, `get_results`, …). It is a pure client of the REST API —
+  it adds no authority, and approval still requires a distinct approver
+  identity/token underneath.
+
+## 6. Error semantics
 
 | HTTP | Meaning |
 |---|---|
