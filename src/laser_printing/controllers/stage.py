@@ -273,19 +273,42 @@ class StageController:
     def wait_for_motion(self) -> None:
         self._wait_for_motion()
 
+    def halt(self) -> None:
+        """Stop all axes immediately (best effort). Safe to call anytime.
+
+        Used by fault handling — must not raise even if the controller
+        rejects the command or the link is down.
+        """
+        try:
+            self._tcp.halt_all(self._axes)
+        except Exception:  # noqa: BLE001 — halting is best-effort by contract
+            logger.warning("Stage halt failed", exc_info=True)
+
+    @property
+    def range_span_mm(self) -> float:
+        """Full travel span (hi - lo); the clamp for validated path moves."""
+        lo, hi = self._range_mm
+        return hi - lo
+
     # -- Data collection -------------------------------------------------
 
     def record_profile(self, n_samples: int, period: int = 1,
                        variables: str = "FVEL(0), FPOS(0)",
-                       array_name: str = "_profile_buf") -> np.ndarray:
+                       array_name: str = "_profile_buf",
+                       wait: bool = True) -> np.ndarray:
         """Declare an on-controller array, start collection, read it back.
 
         Call this AFTER starting a non-blocking move so the collection
-        captures the ramp. Returns numpy array of shape (n_vars, n_samples).
+        captures the ramp. With wait=True (default) the read happens after
+        motion completes — reading immediately would return a partially
+        filled buffer, since DataCollectionExt fills controller memory
+        asynchronously. Returns numpy array of shape (n_vars, n_samples).
         """
         n_vars = variables.count(",") + 1
         self._tcp.declare_real_array(array_name, n_vars, n_samples)
         self._tcp.start_data_collection(array_name, n_samples, period, variables)
+        if wait:
+            self._wait_for_motion()
         return self._tcp.read_real_array(array_name, n_vars, n_samples)
 
     # -- Internal helpers ------------------------------------------------

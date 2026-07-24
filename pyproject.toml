@@ -27,11 +27,13 @@ dependencies = [
 
 [project.scripts]
 labgate-serve = "labgate.api.app:main"
+labgate-mcp = "labgate.mcp_server:main"
 # NOTE: SPiiPlusPython is installed from a local wheel shipped with the ACS
 # SPiiPlus ADK Suite; it is not on PyPI. See README for install steps.
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-cov", "httpx"]
+mcp = ["mcp>=1.2"]
 notebook = ["jupyterlab", "ipykernel", "ipywidgets"]
 
 [tool.setuptools.packages.find]

@@ -32,12 +32,13 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 
-from laser_printing.controllers.laser import LaserController
-from laser_printing.controllers.stage import StageController
+if TYPE_CHECKING:  # hints only — keeps this module importable without SPiiPlusPython
+    from laser_printing.controllers.laser import LaserController
+    from laser_printing.controllers.stage import StageController
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,10 @@ class PrintSynchronizer:
 
         first_point, _ = path[0]
         self._laser.off()  # guarantee off before the first move
-        self._stage.move_absolute(first_point, clamp_mm=None)
+        # Path moves are intentional, range-checked geometry — use the full
+        # travel span as the clamp. clamp_mm=None would apply the DEFAULT
+        # 5 mm typo clamp and fault any longer repositioning or line.
+        self._stage.move_absolute(first_point, clamp_mm=self._stage.range_span_mm)
 
         for i in range(1, len(path)):
             target, laser_on = path[i]
@@ -154,7 +158,7 @@ class PrintSynchronizer:
 
     def _reposition(self, target: Sequence[float]) -> None:
         self._laser.off()
-        self._stage.move_absolute(target, clamp_mm=None)
+        self._stage.move_absolute(target, clamp_mm=self._stage.range_span_mm)
 
     # -- Strategy implementations ----------------------------------------
 
@@ -166,7 +170,7 @@ class PrintSynchronizer:
         endpoints. Use for positioning tests, not production prints.
         """
         self._laser.on()
-        self._stage.move_absolute(end, clamp_mm=None)
+        self._stage.move_absolute(end, clamp_mm=self._stage.range_span_mm)
         self._laser.off()
 
     def _print_velocity_timed(self, start: Sequence[float],
@@ -238,7 +242,7 @@ class PrintSynchronizer:
         off_after_on = max(0.0, off_after_on)
 
         # Launch the non-blocking motion.
-        self._stage.move_absolute_async(end, clamp_mm=None)
+        self._stage.move_absolute_async(end, clamp_mm=self._stage.range_span_mm)
         t0 = time.perf_counter()
 
         # Wait until it's time to send the ON POST.

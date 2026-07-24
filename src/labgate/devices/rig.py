@@ -35,6 +35,11 @@ class RigStage(DeviceAdapter):
         self._cfg = cfg
         self._controller = None
 
+    @property
+    def controller(self):
+        """Live StageController (None until connect). Used by SyncExposure."""
+        return self._controller
+
     def capabilities(self) -> list[Capability]:
         # Same declared surface as the sim adapter — one source of shape.
         return SimStage(self._cfg, self.device_id).capabilities()
@@ -64,11 +69,11 @@ class RigStage(DeviceAdapter):
             controller.disconnect()
 
     def safe_state(self) -> None:
-        """Stage safe state = no new commands. We deliberately do NOT block
-        on wait_for_motion here (up to 30 s/axis) — the laser is already off
-        by safe-state ordering, and a finishing point-to-point move is not a
-        hazard. A true motion-halt primitive is future work (needs ACS Kill/
-        Halt support in StageTcp)."""
+        """Stop motion immediately. StageController.halt() is best-effort
+        by contract (never raises); the laser is already off by safe-state
+        ordering before this runs."""
+        if self._controller is not None:
+            self._controller.halt()
 
     def move_absolute(self, target_mm, velocity_mm_s: float | None = None):
         if self._controller is None:
@@ -94,6 +99,11 @@ class RigLaser(DeviceAdapter):
         self._cfg = cfg
         self._controller = None
         self.output_on = False
+
+    @property
+    def controller(self):
+        """Live LaserController (None until connect). Used by SyncExposure."""
+        return self._controller
 
     def capabilities(self) -> list[Capability]:
         return SimLaser(self._cfg, self.device_id).capabilities()

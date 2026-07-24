@@ -68,12 +68,21 @@ class Platform:
             adapters = build_rig_adapters(cfg)
         for adapter in adapters:
             self.registry.register(adapter)
+        stage = self.registry.by_kind("stage")
+        laser = self.registry.by_kind("laser")
+        if cfg.mode == "sim":
+            from ..exposure import SimExposure
+            exposure = SimExposure(stage, laser)
+        else:
+            from ..exposure import SyncExposure
+            exposure = SyncExposure(stage, laser, cfg.hardware)
         self.tokens = TokenStore.load(cfg.tokens_file)
         self.audit = AuditLog(Path(cfg.storage_dir))
         self.store = PlanStore(Path(cfg.storage_dir))
         self.validator = ValidationEngine(cfg)
         self.estimator = DryRunEstimator(cfg)
-        self.engine = ExecutionEngine(self.registry, self.store, self.audit, cfg)
+        self.engine = ExecutionEngine(self.registry, self.store, self.audit, cfg,
+                                      exposure=exposure)
 
 
 def create_app(cfg: LabgateConfig | None = None) -> FastAPI:

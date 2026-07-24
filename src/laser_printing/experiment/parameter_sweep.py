@@ -160,10 +160,9 @@ class ParameterSweep(BaseExperiment):
 
         # First block is home positioning - execute it now
         if self._blocks:
-            self.stage.move_to(
-                [self._blocks[0][0][0][0],
-                 self._blocks[0][0][0][1],
-                 self._blocks[0][0][0][2]]
+            self.stage.move_absolute(
+                list(self._blocks[0][0][0][:3]),
+                clamp_mm=self.stage.range_span_mm,
             )
 
         # Return conditions list (one per line block after the home block)
@@ -215,7 +214,8 @@ class ParameterSweep(BaseExperiment):
         # Home positioning
         if self._blocks:
             home = self._blocks[0][0][0]
-            self.stage.move_to(list(home))
+            self.stage.move_absolute(list(home),
+                                     clamp_mm=self.stage.range_span_mm)
 
         conditions = []
         for i, power in enumerate(power_per_line):
@@ -228,9 +228,8 @@ class ParameterSweep(BaseExperiment):
         self.laser.set_attenuator(condition["power_pct"])
 
         block_index = index + 1
-        if block_index < len(self._blocks):
-            block = self._blocks[block_index]
-            self.sync.execute_path(block)
-
-        y_pos = block[0][0][1] if block_index < len(self._blocks) else 0
-        return {"y_position_mm": y_pos}
+        if block_index >= len(self._blocks):
+            return {"y_position_mm": 0.0}
+        block = self._blocks[block_index]
+        self.sync.execute_path(block)
+        return {"y_position_mm": block[0][0][1]}

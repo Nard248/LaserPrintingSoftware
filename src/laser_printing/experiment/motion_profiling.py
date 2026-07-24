@@ -98,22 +98,21 @@ class MotionProfiling(BaseExperiment):
         self.stage.set_acceleration(0, accel)
         self.stage.set_jerk(0, jerk)
 
-        # Ensure we're at start position
-        self.stage.move_to(list(self._start_point))
+        # Ensure we're at start position (may be far from home — use the
+        # full-travel clamp, geometry is intentional here)
+        self.stage.move_absolute(list(self._start_point),
+                                 clamp_mm=self.stage.range_span_mm)
 
-        # Declare data collection array
-        self.stage.declare_data_array(self._array_name, 2, self.n_samples)
-
-        # Start non-blocking motion + data collection
-        self.stage.move_to_non_blocking(list(self._end_point))
-        self.stage.start_data_collection(
-            self._array_name, self.n_samples,
-            self.sample_period, "FVEL(0), FPOS(0)"
+        # Start non-blocking motion, then capture FVEL/FPOS on the
+        # controller; record_profile(wait=True) reads the buffer only after
+        # motion completes so the ramp is fully captured.
+        self.stage.move_absolute_async(list(self._end_point),
+                                       clamp_mm=self.stage.range_span_mm)
+        data = self.stage.record_profile(
+            self.n_samples, self.sample_period,
+            variables="FVEL(0), FPOS(0)", array_name=self._array_name,
+            wait=True,
         )
-        self.stage.wait_for_motion(timeout_ms=30000)
-
-        # Read collected data
-        data = self.stage.read_data_array(self._array_name, 2, self.n_samples)
         vel_array = data[0, :]
         pos_array = data[1, :]
         time_array = np.arange(len(vel_array)) * self.sample_period * self.servo_cycle_s
