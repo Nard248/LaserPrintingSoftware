@@ -22,6 +22,9 @@ env/
 .DS_Store
 Thumbs.db
 
-# Docs - ignore everything except the technical guide
+# Docs - ignore everything except the technical guide and project docs
 Docs/*
 !Docs/TECHNICAL_GUIDE.md
+!Docs/requirements/
+!Docs/plans/
+!Docs/integration/
