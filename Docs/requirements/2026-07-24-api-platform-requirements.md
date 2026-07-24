@@ -82,6 +82,7 @@ Note: the agents' internal cross-validation is a *quality* layer above the trust
 - **Q-H3:** Are there mutual-constraint rules we must encode? (e.g., WL must be off during 2PP exposure; camera capture requires WL on; shutter states.)
 - **Q-H4:** What is the definitive safe-state per device (laser: off vs. shutter closed; stage: stop vs. home; WL: off)?
 - **Q-H5:** Setup computer: OS + version, Python available, can we run a persistent local service on it?
+- **Q-H6:** Safe Z/focal-plane approach: is a 3-axis diagonal move to the focus position acceptable, or must approach be sequenced (XY first, then Z — or Z-first)? Is there an objective-collision risk, and should the park position stay [0,0,0] or be configurable?
 
 **Safety & policy — for Mushegh**
 - **Q-S1:** Who signs off the hard bounds table (max laser power, max stage speed, exposure limits) that the validation engine enforces?

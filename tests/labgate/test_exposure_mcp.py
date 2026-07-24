@@ -66,9 +66,11 @@ def test_sync_exposure_runs_calibrated_path(cfg):
                            {"synchronization": {"strategy": "sequential"}})
     done = backend.write_line((0, 0, 6), (5, 0, 6), 5.0, 2, NO_ABORT)
     assert done
-    assert stage_ctrl.velocity == 5.0  # write velocity set before sync path
-    # rep 1: reposition to start + print to end; rep 2 zig-zags back
-    assert stage_ctrl.moves[0] == [0, 0, 6] and stage_ctrl.moves[1] == [5, 0, 6]
+    # travel velocity restored after the write (write velocity 5.0 was set
+    # for the path itself — see test_safety_fixes for the full timeline)
+    assert stage_ctrl.velocity == SyncExposure.TRAVEL_VELOCITY_MM_S
+    # approach + rep 1 reposition/print; rep 2 zig-zags back
+    assert stage_ctrl.moves[0] == [0, 0, 6] and [5, 0, 6] in stage_ctrl.moves
     assert stage_ctrl.moves[-1] == [0, 0, 6]
     assert laser_ctrl.events[-1] == "off" and not laser_ctrl.is_on
 
@@ -116,11 +118,13 @@ def test_motion_profiling_uses_current_stage_api(tmp_path):
 
         def record_profile(self, n_samples, period=1,
                            variables="FVEL(0), FPOS(0)",
-                           array_name="_profile_buf", wait=True):
+                           array_name="_profile_buf", wait=True,
+                           servo_cycle_s=0.001064):
             assert wait is True
-            t = np.arange(n_samples) * 0.001064
+            assert array_name != "_profile_buf"  # per-condition buffer name
+            t = np.arange(n_samples) * servo_cycle_s
             vel = np.minimum(5.0, t / 0.357 * 5.0)
-            pos = np.cumsum(vel) * 0.001064
+            pos = np.cumsum(vel) * servo_cycle_s
             return np.vstack([vel, pos])
 
     exp = MotionProfiling(

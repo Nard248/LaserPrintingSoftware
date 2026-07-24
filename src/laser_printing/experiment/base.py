@@ -130,6 +130,16 @@ class BaseExperiment(ABC):
                         "Condition %d failed!", i, exc_info=True
                     )
                     result = {"error": True}
+                    # A faulted condition must not leave the beam on while
+                    # we carry on to the next condition (or fall through to
+                    # teardown). force=True bypasses a possibly-stale cache.
+                    if self.laser is not None:
+                        try:
+                            self.laser.off(force=True)
+                        except Exception:
+                            logger.critical(
+                                "LASER MAY STILL BE ON — off() failed after "
+                                "condition fault", exc_info=True)
 
                 condition_time = time.time() - condition_start
                 # Merge condition params + measured results + timing
@@ -199,7 +209,9 @@ class BaseExperiment(ABC):
         """Safely disconnect all hardware (guaranteed to run)."""
         if self.laser:
             try:
-                self.laser.disconnect()
+                # Force output off before the stage homes under the beam —
+                # "guaranteed safe shutdown" means laser off, not as-is.
+                self.laser.disconnect(leave_output=False)
             except Exception:
                 logger.warning("Laser disconnect failed.", exc_info=True)
         if self.stage:

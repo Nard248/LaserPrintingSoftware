@@ -53,6 +53,8 @@ class SimExposure:
 
     def write_line(self, start_mm, end_mm, velocity_mm_s, repetitions,
                    abort_flag) -> bool:
+        if abort_flag.is_set():
+            return False
         self._stage.move_absolute(start_mm)  # reposition, laser off
         current, target = start_mm, end_mm
         for _ in range(repetitions):
@@ -96,17 +98,31 @@ class SyncExposure:
                 self._hardware_cfg, laser_ctrl, stage_ctrl)
         return self._sync
 
+    TRAVEL_VELOCITY_MM_S = 1.0
+
     def write_line(self, start_mm, end_mm, velocity_mm_s, repetitions,
                    abort_flag) -> bool:
+        if abort_flag.is_set():
+            return False
         sync = self._get_sync()
         stage_ctrl = self._stage_adapter.controller
+        # Reposition to the line start at TRAVEL velocity — a validated slow
+        # write velocity (e.g. 0.1 mm/s) over a long approach would blow the
+        # 30 s motion timeout if used for travel.
+        stage_ctrl.set_velocity(self.TRAVEL_VELOCITY_MM_S)
+        stage_ctrl.move_absolute(list(start_mm),
+                                 clamp_mm=stage_ctrl.range_span_mm)
         # PrintSynchronizer reads the stage's velocity SETPOINTS to compute
-        # the firing window — set the commanded write velocity first.
+        # the firing window — set the commanded write velocity for the lines.
         stage_ctrl.set_velocity(float(velocity_mm_s))
-        a, b = list(start_mm), list(end_mm)
-        for _ in range(repetitions):
-            if abort_flag.is_set():
-                return False
-            sync.execute_path([(a, False), (b, True)])  # reposition + print
-            a, b = b, a  # zig-zag
-        return True
+        try:
+            a, b = list(start_mm), list(end_mm)
+            for _ in range(repetitions):
+                if abort_flag.is_set():
+                    return False
+                # path-internal reposition is now a near-zero-length move
+                sync.execute_path([(a, False), (b, True)])
+                a, b = b, a  # zig-zag
+            return True
+        finally:
+            stage_ctrl.set_velocity(self.TRAVEL_VELOCITY_MM_S)
