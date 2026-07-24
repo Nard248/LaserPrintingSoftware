@@ -57,3 +57,14 @@ logging:
   level: "INFO"
   # Set to a file path to also log to file (null = console only)
   file: null
+
+labgate:
+  # Platform mode: "sim" runs entirely without hardware (dev/CI/agent
+  # integration testing); "rig" drives the real stage+laser via the
+  # laser_printing controllers (requires the setup computer).
+  mode: "sim"
+  # Where plans, runs, artifacts and the audit log are stored.
+  storage_dir: "labgate_data"
+  # YAML file mapping bearer tokens -> identities/roles.
+  # See config/tokens.example.yaml; never commit real tokens.
+  tokens_file: null

@@ -28,3 +28,5 @@ Docs/*
 !Docs/requirements/
 !Docs/plans/
 !Docs/integration/
+labgate_data/
+config/tokens.yaml

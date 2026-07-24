@@ -1,0 +1,17 @@
+# labgate token file — copy to tokens.yaml (gitignored) and edit.
+# Roles: operator (propose/execute), approver (approve others' plans), admin.
+# chat.photonics.ai maps each of its users onto one of these tokens so the
+# platform always knows the real identity behind a request.
+tokens:
+  CHANGE-ME-operator-token:
+    user_id: darina
+    display_name: "Darina (2PP experiments)"
+    roles: [operator]
+  CHANGE-ME-approver-token:
+    user_id: tatevik
+    display_name: "Tatevik (qualified approver)"
+    roles: [approver]
+  CHANGE-ME-admin-token:
+    user_id: narek
+    display_name: "Narek (platform admin)"
+    roles: [admin]
