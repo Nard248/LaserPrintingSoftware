@@ -43,6 +43,17 @@ class ExposureBackend(Protocol):
         abort flag was set (never mid-traverse). Laser is off on return.
         """
 
+    def execute_path(
+        self,
+        path: Sequence[tuple[Sequence[float], bool]],
+        velocity_mm_s: float,
+        abort_flag: AbortSignal,
+    ) -> bool:
+        """Execute a canonical [(point, laser_on)] path (STL prints).
+
+        Abort is honored between path chunks. Laser is off on return.
+        """
+
 
 class SimExposure:
     """Explicit on/move/off sequence against the sim (or any) adapters."""
@@ -67,6 +78,24 @@ class SimExposure:
                 self._laser.off()  # never leave the beam on if the move faults
             current, target = target, current
         return True
+
+    def execute_path(self, path, velocity_mm_s, abort_flag,
+                     abort_check_every: int = 16) -> bool:
+        try:
+            for i, (point, laser_on) in enumerate(path):
+                if i % abort_check_every == 0 and abort_flag.is_set():
+                    return False
+                if laser_on:
+                    self._laser.on()
+                    try:
+                        self._stage.move_absolute(point, velocity_mm_s=velocity_mm_s)
+                    finally:
+                        self._laser.off()
+                else:
+                    self._stage.move_absolute(point)  # travel velocity
+            return True
+        finally:
+            self._laser.off()
 
 
 class SyncExposure:
@@ -99,6 +128,30 @@ class SyncExposure:
         return self._sync
 
     TRAVEL_VELOCITY_MM_S = 1.0
+
+    def execute_path(self, path, velocity_mm_s, abort_flag,
+                     chunk_size: int = 24) -> bool:
+        """Run a canonical path through PrintSynchronizer in chunks so the
+        abort flag is polled at least every chunk_size segments. Continuation
+        chunks are prefixed with a reposition to their anchor point (a
+        near-no-op, since the stage is already there)."""
+        if abort_flag.is_set():
+            return False
+        sync = self._get_sync()
+        stage_ctrl = self._stage_adapter.controller
+        stage_ctrl.set_velocity(float(velocity_mm_s))
+        try:
+            for start in range(0, len(path), chunk_size):
+                if abort_flag.is_set():
+                    return False
+                chunk = [(list(p), bool(on))
+                         for p, on in path[start:start + chunk_size]]
+                if start > 0:
+                    chunk = [(list(path[start - 1][0]), False)] + chunk
+                sync.execute_path(chunk)
+            return True
+        finally:
+            stage_ctrl.set_velocity(self.TRAVEL_VELOCITY_MM_S)
 
     def write_line(self, start_mm, end_mm, velocity_mm_s, repetitions,
                    abort_flag) -> bool:
