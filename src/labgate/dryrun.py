@@ -15,11 +15,14 @@ from .spec import (
     CaptureImage,
     ExperimentSpec,
     MoveStage,
+    PrintStl,
     SetLaserPower,
     SetWhiteLight,
     Wait,
     WriteArray,
     WriteLine,
+    WritePowerSweepArray,
+    ZStack,
 )
 
 _CAPTURE_S = 0.5  # nominal camera capture time
@@ -38,11 +41,15 @@ class DryRunReport(BaseModel):
     exposure_events: int
     bounding_box_mm: dict = Field(default_factory=dict)
     per_op: list[OpEstimate] = Field(default_factory=list)
+    # name of the rendered toolpath image in the plan's artifacts (set by the
+    # API layer after rendering) — what the approver actually looks at
+    preview_artifact: str | None = None
 
 
 class DryRunEstimator:
-    def __init__(self, cfg: LabgateConfig) -> None:
+    def __init__(self, cfg: LabgateConfig, geometry=None) -> None:
         self._cfg = cfg
+        self._geometry = geometry
 
     def estimate(self, spec: ExperimentSpec) -> DryRunReport:
         settle = self._cfg.bounds.laser.toggle_settle_s
@@ -89,6 +96,28 @@ class DryRunEstimator:
                 end_x = op.x_end_mm if op.repetitions % 2 else op.x_start_mm
                 pos = (end_x, y_end, op.z_mm)
                 detail = f"{op.line_count} lines x {op.repetitions} reps, pitch {op.y_pitch_mm} mm"
+            elif isinstance(op, (WritePowerSweepArray, ZStack, PrintStl)):
+                # path-shaped ops: estimate from the shared expansion — the
+                # same trajectory validation checked and execution will run
+                from .pathing import op_to_path
+                seg_path = op_to_path(op, self._geometry)
+                vel = op.velocity_mm_s
+                exposures_here = 0
+                prev = pos
+                prev_on = False
+                for point, laser_on in seg_path:
+                    step = seg(prev, point)
+                    duration += step / (vel if laser_on else 1.0)
+                    dist_mm += step
+                    if laser_on and not prev_on:
+                        exposures_here += 1
+                        duration += 2 * settle
+                    prev, prev_on = point, laser_on
+                    points.append(point)
+                exposures += exposures_here
+                if seg_path:
+                    pos = seg_path[-1][0]
+                detail = f"{len(seg_path)} path points, {exposures_here} exposure runs"
             elif isinstance(op, Wait):
                 duration = op.seconds
             elif isinstance(op, CaptureImage):

@@ -12,16 +12,25 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from .config import LabgateConfig
+from .errors import ValidationFailed
 from .spec import (
     CaptureImage,
     ExperimentSpec,
     MoveStage,
+    PrintStl,
     SetLaserPower,
     SetWhiteLight,
     Wait,
     WriteArray,
     WriteLine,
+    WritePowerSweepArray,
+    ZStack,
 )
+
+# Ops that expose the laser (need power configured + WL off)
+_WRITE_OPS = (WriteLine, WriteArray, WritePowerSweepArray, ZStack, PrintStl)
+# Write ops that carry their own power setting
+_SELF_POWERED = (WritePowerSweepArray, ZStack, PrintStl)
 
 
 class CheckResult(BaseModel):
@@ -45,8 +54,9 @@ class ValidationReport(BaseModel):
 
 
 class ValidationEngine:
-    def __init__(self, cfg: LabgateConfig) -> None:
+    def __init__(self, cfg: LabgateConfig, geometry=None) -> None:
         self._cfg = cfg
+        self._geometry = geometry  # GeometryService; required for print_stl
 
     def validate(self, spec: ExperimentSpec) -> ValidationReport:
         checks: list[CheckResult] = []
@@ -81,40 +91,80 @@ class ValidationEngine:
             if isinstance(op, Wait) and op.seconds < 0:
                 out.append(CheckResult(check=f"op[{i}].seconds", ok=False,
                                        detail="negative wait"))
-            if isinstance(op, (WriteLine, WriteArray)) and op.repetitions < 1:
+            if isinstance(op, (WriteLine, WriteArray, WritePowerSweepArray, ZStack)) \
+                    and op.repetitions < 1:
                 out.append(CheckResult(check=f"op[{i}].repetitions", ok=False,
                                        detail="repetitions must be >= 1"))
             if isinstance(op, WriteArray) and op.line_count < 1:
                 out.append(CheckResult(check=f"op[{i}].line_count", ok=False,
                                        detail="line_count must be >= 1"))
+            if isinstance(op, WritePowerSweepArray):
+                for j, p in enumerate(op.attenuator_percent_per_line):
+                    if not a_lo <= p <= a_hi:
+                        out.append(CheckResult(
+                            check=f"op[{i}].attenuator_percent_per_line[{j}]",
+                            ok=False, detail=f"{p}% outside [{a_lo}, {a_hi}]"))
+            if isinstance(op, ZStack):
+                for p in op.powers():
+                    if not a_lo <= p <= a_hi:
+                        out.append(CheckResult(
+                            check=f"op[{i}].power_ladder", ok=False,
+                            detail=f"{p}% outside [{a_lo}, {a_hi}]"))
+                        break
+                if op.power_step_percent <= 0 \
+                        and op.end_power_percent != op.start_power_percent:
+                    out.append(CheckResult(
+                        check=f"op[{i}].power_step_percent", ok=False,
+                        detail="power_step_percent must be > 0 for a power range"))
+            if isinstance(op, PrintStl):
+                if not a_lo <= op.attenuator_percent <= a_hi:
+                    out.append(CheckResult(
+                        check=f"op[{i}].attenuator_percent", ok=False,
+                        detail=f"{op.attenuator_percent}% outside [{a_lo}, {a_hi}]"))
+                step_um = {"mm": 1000.0, "micron": 1.0, "nm": 0.001}[op.unit] \
+                    * op.step_size
+                if step_um < 1.0:
+                    out.append(CheckResult(
+                        check=f"op[{i}].step_size", ok=True, severity="warning",
+                        detail=f"step {step_um:.2f} um is very fine — slicing "
+                               "may be slow and the path very long"))
         if not out:
             out.append(CheckResult(check="bounds", ok=True, detail="all parameters in bounds"))
         return out
 
-    # --- V3: geometry inside travel range ---
-    def _points(self, op) -> list[tuple[float, float, float]]:
-        if isinstance(op, MoveStage):
-            return [op.target_mm]
-        if isinstance(op, WriteLine):
-            return [op.start_mm, op.end_mm]
-        if isinstance(op, WriteArray):
-            y_end = op.y_start_mm + (op.line_count - 1) * op.y_pitch_mm
-            return [
-                (op.x_start_mm, op.y_start_mm, op.z_mm),
-                (op.x_end_mm, y_end, op.z_mm),
-            ]
-        return []
-
+    # --- V3: geometry inside travel range (via the shared path expansion,
+    # so validation sees the SAME trajectory the executor will run — for
+    # print_stl that means the actual deterministically sliced path) ---
     def _check_geometry(self, spec: ExperimentSpec) -> list[CheckResult]:
+        from .pathing import op_to_path
+
         lo, hi = self._cfg.bounds.stage.range_mm
         out: list[CheckResult] = []
         for i, op in enumerate(spec.operations):
-            for point in self._points(op):
+            if isinstance(op, PrintStl) and self._geometry is None:
+                out.append(CheckResult(
+                    check=f"op[{i}].print_stl", ok=False,
+                    detail="platform has no geometry service configured"))
+                continue
+            try:
+                path = op_to_path(op, self._geometry)
+            except ValidationFailed as exc:
+                out.append(CheckResult(check=f"op[{i}].{op.op}", ok=False,
+                                       detail=str(exc)))
+                continue
+            bad = 0
+            for point, _laser in path:
                 for axis_name, value in zip("xyz", point):
                     if not lo <= value <= hi:
-                        out.append(CheckResult(
-                            check=f"op[{i}].geometry.{axis_name}", ok=False,
-                            detail=f"{value} mm outside travel range [{lo}, {hi}]"))
+                        bad += 1
+                        if bad <= 3:  # report the first few, count the rest
+                            out.append(CheckResult(
+                                check=f"op[{i}].geometry.{axis_name}", ok=False,
+                                detail=f"{value} mm outside travel range [{lo}, {hi}]"))
+            if bad > 3:
+                out.append(CheckResult(
+                    check=f"op[{i}].geometry", ok=False,
+                    detail=f"...and {bad - 3} more out-of-range coordinates"))
         if not out:
             out.append(CheckResult(check="geometry", ok=True,
                                    detail="all coordinates inside travel range"))
@@ -130,11 +180,13 @@ class ValidationEngine:
                 power_set = True
             if isinstance(op, SetWhiteLight):
                 wl_on = op.on
-            if isinstance(op, (WriteLine, WriteArray)) and not power_set:
+            if isinstance(op, _SELF_POWERED):
+                power_set = True  # these ops set their own attenuator/divider
+            if isinstance(op, _WRITE_OPS) and not power_set:
                 out.append(CheckResult(
                     check=f"op[{i}].laser_power_unset", ok=False,
                     detail="write operation before any set_laser_power"))
-            if isinstance(op, (WriteLine, WriteArray)) and wl_on:
+            if isinstance(op, _WRITE_OPS) and wl_on:
                 out.append(CheckResult(
                     check=f"op[{i}].wl_during_exposure", ok=False,
                     detail="white light must be off during laser exposure"))
@@ -157,7 +209,7 @@ class ValidationEngine:
             length = None
             if isinstance(op, WriteLine):
                 length = max(abs(e - s) for s, e in zip(op.start_mm, op.end_mm))
-            elif isinstance(op, WriteArray):
+            elif isinstance(op, (WriteArray, WritePowerSweepArray, ZStack)):
                 length = abs(op.x_end_mm - op.x_start_mm)
             if length is not None and length < min_len:
                 out.append(CheckResult(

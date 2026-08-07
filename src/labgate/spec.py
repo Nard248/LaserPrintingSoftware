@@ -70,8 +70,77 @@ class Wait(_StrictModel):
     seconds: Finite
 
 
+class WritePowerSweepArray(_StrictModel):
+    """Parallel lines where each line gets its own attenuator setting —
+    the lab's line-DOE / power-sweep workflow as one validated unit."""
+
+    op: Literal["write_power_sweep_array"] = "write_power_sweep_array"
+    x_start_mm: Finite
+    x_end_mm: Finite
+    y_start_mm: Finite
+    y_pitch_mm: Finite
+    attenuator_percent_per_line: list[Finite] = Field(min_length=1)
+    z_mm: Finite
+    velocity_mm_s: Finite
+    pp_divider: int = 1
+    repetitions: int = 1
+
+    @property
+    def line_count(self) -> int:
+        return len(self.attenuator_percent_per_line)
+
+
+class ZStack(_StrictModel):
+    """2PP polymerization-threshold workflow: at each power level, a stack
+    of z_count lines stepping Z at fixed Y; Y shifts by y_pitch per power.
+    Unlike the legacy generator, end_power_percent is INCLUSIVE."""
+
+    op: Literal["z_stack"] = "z_stack"
+    x_start_mm: Finite
+    x_end_mm: Finite
+    y_start_mm: Finite
+    y_pitch_mm: Finite
+    z_start_mm: Finite
+    z_step_mm: Finite
+    z_count: int = Field(ge=1)
+    start_power_percent: Finite
+    end_power_percent: Finite
+    power_step_percent: Finite
+    velocity_mm_s: Finite
+    pp_divider: int = 1
+    repetitions: int = 1
+
+    def powers(self) -> list[float]:
+        """Inclusive power ladder start..end by step."""
+        if self.power_step_percent <= 0:
+            return [self.start_power_percent]
+        out, p = [], self.start_power_percent
+        while p <= self.end_power_percent + 1e-9:
+            out.append(round(p, 6))
+            p += self.power_step_percent
+        return out or [self.start_power_percent]
+
+
+class PrintStl(_StrictModel):
+    """Print an uploaded STL model. The AI references the model and the
+    process parameters; slicing into a toolpath happens deterministically
+    below the trust boundary (labgate.geometry)."""
+
+    op: Literal["print_stl"] = "print_stl"
+    model_id: str
+    unit: Literal["mm", "micron", "nm"] = "micron"
+    step_size: Finite = Field(gt=0, description="discretization step, in `unit`")
+    start_position_mm: Point3
+    attenuator_percent: Finite
+    velocity_mm_s: Finite
+    pp_divider: int = 1
+    repetition_count: int = Field(default=1, ge=1)
+    is_ablation: bool = False
+
+
 Operation = Annotated[
-    Union[SetLaserPower, WriteLine, WriteArray, MoveStage, SetWhiteLight, CaptureImage, Wait],
+    Union[SetLaserPower, WriteLine, WriteArray, MoveStage, SetWhiteLight,
+          CaptureImage, Wait, WritePowerSweepArray, ZStack, PrintStl],
     Field(discriminator="op"),
 ]
 

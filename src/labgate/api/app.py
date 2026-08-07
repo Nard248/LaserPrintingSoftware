@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -33,6 +33,7 @@ from ..errors import (
     LabgateError,
     TransitionError,
     UnknownPlanError,
+    ValidationFailed,
 )
 from ..executor import ExecutionEngine
 from ..lifecycle import PlanStore
@@ -79,10 +80,13 @@ class Platform:
         self.tokens = TokenStore.load(cfg.tokens_file)
         self.audit = AuditLog(Path(cfg.storage_dir))
         self.store = PlanStore(Path(cfg.storage_dir))
-        self.validator = ValidationEngine(cfg)
-        self.estimator = DryRunEstimator(cfg)
+        from ..geometry import GeometryService, ModelStore
+        self.models = ModelStore(Path(cfg.storage_dir))
+        self.geometry = GeometryService(self.models, Path(cfg.storage_dir))
+        self.validator = ValidationEngine(cfg, geometry=self.geometry)
+        self.estimator = DryRunEstimator(cfg, geometry=self.geometry)
         self.engine = ExecutionEngine(self.registry, self.store, self.audit, cfg,
-                                      exposure=exposure)
+                                      exposure=exposure, geometry=self.geometry)
 
 
 def create_app(cfg: LabgateConfig | None = None) -> FastAPI:
@@ -172,7 +176,68 @@ def create_app(cfg: LabgateConfig | None = None) -> FastAPI:
     def dry_run(plan_id: str, identity: Identity = Depends(current_identity)) -> dict:
         require_read(identity)
         record = platform.store.snapshot(plan_id)
-        return platform.estimator.estimate(record.spec).model_dump()
+        report = platform.estimator.estimate(record.spec)
+        # Render the toolpath the approver is being asked to sign off on.
+        from ..preview import PREVIEW_ARTIFACT, render_preview
+        run = RunResults(Path(platform.cfg.storage_dir), plan_id)
+        try:
+            if render_preview(record.spec, platform.geometry,
+                              run.artifact_path(PREVIEW_ARTIFACT)):
+                report.preview_artifact = PREVIEW_ARTIFACT
+        except Exception as exc:  # noqa: BLE001 — preview is best-effort
+            platform.audit.append("preview_error", identity.user_id,
+                                  {"plan_id": plan_id, "error": str(exc)})
+        return report.model_dump()
+
+    @app.post("/plans/{plan_id}/rerun", status_code=201)
+    def rerun(plan_id: str, identity: Identity = Depends(current_identity)) -> PlanSummary:
+        """Reproducibility: clone a plan's spec into a NEW plan (fresh
+        validation + fresh approval). The recipe re-runs without any AI."""
+        require_role(identity, Role.OPERATOR)
+        source = platform.store.snapshot(plan_id)
+        record = platform.store.create(source.spec, identity)
+        platform.audit.append("plan_rerun", identity.user_id,
+                              {"plan_id": record.plan_id, "source": plan_id})
+        report = platform.validator.validate(source.spec)
+        record = platform.store.set_validated(record.plan_id, report, "validator")
+        return PlanSummary.from_record(record)
+
+    @app.get("/queue")
+    def execution_queue(identity: Identity = Depends(current_identity)) -> dict:
+        require_read(identity)
+        return platform.engine.queue_snapshot()
+
+    @app.post("/models", status_code=201)
+    async def upload_model(
+        file: UploadFile, identity: Identity = Depends(current_identity),
+    ) -> dict:
+        """Upload an STL model; returns a content-addressed model_id that
+        print_stl operations reference."""
+        require_role(identity, Role.OPERATOR)
+        data = await file.read()
+        if len(data) > 50 * 1024 * 1024:
+            raise HTTPException(413, "model larger than 50 MB")
+        try:
+            info = platform.models.save(file.filename or "model.stl", data)
+        except ValidationFailed as exc:
+            raise HTTPException(422, str(exc)) from None
+        platform.audit.append("model_uploaded", identity.user_id,
+                              info.model_dump())
+        return info.model_dump()
+
+    @app.get("/models")
+    def list_models(identity: Identity = Depends(current_identity)) -> list[dict]:
+        require_read(identity)
+        return [m.model_dump() for m in platform.models.list()]
+
+    @app.get("/models/{model_id}")
+    def model_info(model_id: str,
+                   identity: Identity = Depends(current_identity)) -> dict:
+        require_read(identity)
+        try:
+            return platform.models.info(model_id).model_dump()
+        except ValidationFailed as exc:
+            raise HTTPException(404, str(exc)) from None
 
     @app.post("/plans/{plan_id}/approve")
     def approve(plan_id: str, identity: Identity = Depends(current_identity)) -> PlanSummary:

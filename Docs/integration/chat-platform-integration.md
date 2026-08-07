@@ -57,9 +57,20 @@ fire a real laser.
 ```
 
 Operation vocabulary (v1): `set_laser_power`, `write_line`, `write_array`,
-`move_stage`, `set_white_light`, `capture_image`, `wait`. All units explicit
-(`_mm`, `_mm_s`, `_percent`, `seconds`). The AI authors *intent*; motion
-expansion and stage/laser synchronization happen inside the platform.
+`write_power_sweep_array` (per-line attenuator list — the lab's DOE/power-
+sweep workflow as one op), `z_stack` (2PP threshold ladder; inclusive power
+range), `print_stl` (references an uploaded model; slicing happens inside
+the platform), `move_stage`, `set_white_light`, `capture_image`, `wait`.
+All units explicit (`_mm`, `_mm_s`, `_percent`, `seconds`). The AI authors
+*intent*; motion expansion, STL slicing, and stage/laser synchronization
+happen inside the platform.
+
+Additional endpoints beyond the lifecycle table: `POST /models` (multipart
+STL upload → content-addressed `model_id`), `GET /models`, `POST
+/plans/{id}/rerun` (reproduce a recipe as a fresh plan), `GET /queue`
+(FIFO execution queue). `POST /plans/{id}/dry-run` now also renders the
+toolpath to `dryrun_preview.png` (fetch via the artifacts route) — show
+that image to the user at the approval step.
 
 ## 3. Mapping Mushegh's two-agent workflow
 
