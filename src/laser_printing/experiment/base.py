@@ -29,9 +29,10 @@ from typing import Any
 import pandas as pd
 
 from laser_printing.config import load_config
-from laser_printing.controllers.laser import LaserController
-from laser_printing.controllers.stage import StageController
-from laser_printing.controllers.sync import PrintSynchronizer
+
+# Controller imports are deferred to _connect_hardware so this module (and
+# every experiment class) is importable and testable on machines without
+# the SPiiPlusPython vendor wheel.
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,16 @@ class BaseExperiment(ABC):
                         "Condition %d failed!", i, exc_info=True
                     )
                     result = {"error": True}
+                    # A faulted condition must not leave the beam on while
+                    # we carry on to the next condition (or fall through to
+                    # teardown). force=True bypasses a possibly-stale cache.
+                    if self.laser is not None:
+                        try:
+                            self.laser.off(force=True)
+                        except Exception:
+                            logger.critical(
+                                "LASER MAY STILL BE ON — off() failed after "
+                                "condition fault", exc_info=True)
 
                 condition_time = time.time() - condition_start
                 # Merge condition params + measured results + timing
@@ -176,11 +187,18 @@ class BaseExperiment(ABC):
 
     def _connect_hardware(self) -> None:
         """Connect to laser and stage, initialize synchronizer."""
+        from laser_printing.controllers.laser import LaserController
+        from laser_printing.controllers.stage import StageController
+        from laser_printing.controllers.sync import PrintSynchronizer
+
         self.laser = LaserController.from_config(self.config["laser"])
         self.laser.connect()
 
         self.stage = StageController.from_config(self.config["stage"])
-        self.stage.connect(home_position=[0.0, 0.0, self.z_focus])
+        # Home is fixed at [0, 0, 0] (project convention; connect() enforces
+        # it). The focal plane is reached by each experiment's own path
+        # blocks, which carry z_focus explicitly.
+        self.stage.connect()
 
         self.sync = PrintSynchronizer.from_config(
             self.config, self.laser, self.stage
@@ -191,7 +209,9 @@ class BaseExperiment(ABC):
         """Safely disconnect all hardware (guaranteed to run)."""
         if self.laser:
             try:
-                self.laser.disconnect()
+                # Force output off before the stage homes under the beam —
+                # "guaranteed safe shutdown" means laser off, not as-is.
+                self.laser.disconnect(leave_output=False)
             except Exception:
                 logger.warning("Laser disconnect failed.", exc_info=True)
         if self.stage:

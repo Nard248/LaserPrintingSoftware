@@ -76,6 +76,9 @@ class StageController:
                 f"default_velocity length {len(self._velocities)} "
                 f"does not match axes length {len(self._axes)}"
             )
+        # Pristine copy: homing on connect/disconnect must run at the
+        # configured defaults, not whatever a print sweep last set.
+        self._default_velocities = list(self._velocities)
         self._velocity_cache: list[float | None] = [None] * len(self._axes)
 
     @classmethod
@@ -136,8 +139,8 @@ class StageController:
                 self._tcp.commutate(axis)
                 logger.debug("Axis %d commutated", axis)
 
-        # Apply default velocities.
-        self.set_velocity(self._velocities)
+        # Apply default velocities (the pristine configured values).
+        self.set_velocity(self._default_velocities)
 
         # Drive to [0, 0, 0] using clamp-free absolute move (initial
         # homing may need a larger step than the usual clamp allows).
@@ -149,6 +152,10 @@ class StageController:
         if self._tcp._handler is None:
             return
         try:
+            # A slow write velocity left over from a sweep (e.g. 0.1 mm/s)
+            # would make the home move exceed the 30 s motion wait — always
+            # home at the configured defaults.
+            self.set_velocity(self._default_velocities)
             logger.info("Stage returning to HOME %s before disconnect",
                         HOME_POSITION)
             self._move_absolute_unchecked(HOME_POSITION)
@@ -273,19 +280,50 @@ class StageController:
     def wait_for_motion(self) -> None:
         self._wait_for_motion()
 
+    def halt(self) -> None:
+        """Stop all axes immediately (best effort). Safe to call anytime.
+
+        Used by fault handling — must not raise even if the controller
+        rejects the command or the link is down.
+        """
+        try:
+            self._tcp.halt_all(self._axes)
+        except Exception:  # noqa: BLE001 — halting is best-effort by contract
+            logger.warning("Stage halt failed", exc_info=True)
+
+    @property
+    def range_span_mm(self) -> float:
+        """Full travel span (hi - lo); the clamp for validated path moves."""
+        lo, hi = self._range_mm
+        return hi - lo
+
     # -- Data collection -------------------------------------------------
 
     def record_profile(self, n_samples: int, period: int = 1,
                        variables: str = "FVEL(0), FPOS(0)",
-                       array_name: str = "_profile_buf") -> np.ndarray:
+                       array_name: str = "_profile_buf",
+                       wait: bool = True,
+                       servo_cycle_s: float = 0.001064) -> np.ndarray:
         """Declare an on-controller array, start collection, read it back.
 
         Call this AFTER starting a non-blocking move so the collection
-        captures the ramp. Returns numpy array of shape (n_vars, n_samples).
+        captures the ramp. With wait=True (default) the read happens only
+        after BOTH motion has ended and the full collection window
+        (n_samples * period * servo cycle) has elapsed — DataCollectionExt
+        fills controller memory asynchronously and keeps sampling after the
+        move stops, so reading at motion-end would return a partially
+        filled buffer. Returns numpy array of shape (n_vars, n_samples).
         """
         n_vars = variables.count(",") + 1
         self._tcp.declare_real_array(array_name, n_vars, n_samples)
+        collect_start = time.perf_counter()
         self._tcp.start_data_collection(array_name, n_samples, period, variables)
+        if wait:
+            self._wait_for_motion()
+            remaining = (n_samples * period * servo_cycle_s
+                         - (time.perf_counter() - collect_start))
+            if remaining > 0:
+                time.sleep(remaining + 0.05)  # small margin past window end
         return self._tcp.read_real_array(array_name, n_vars, n_samples)
 
     # -- Internal helpers ------------------------------------------------

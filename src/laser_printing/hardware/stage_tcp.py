@@ -117,6 +117,32 @@ class StageTcp:
     def wait_motion_end(self, axis: int, timeout_ms: int = -1) -> None:
         sp.WaitMotionEnd(self.handle, axis, timeout_ms, True)
 
+    def halt_all(self, axes: Sequence[int]) -> None:
+        """Stop motion on all given axes immediately.
+
+        The SPiiPlus API exposes halt/kill under different names across ADK
+        versions (KillM/HaltM multi-axis, Kill/Halt per-axis) — probe in
+        order of preference. NEEDS ON-RIG VERIFICATION against the installed
+        SPiiPlusPython wheel; raises RuntimeError if no variant exists so the
+        caller can log it.
+        """
+        # Argument shape follows this file's proven (..., wait, failure_check)
+        # convention — e.g. EnableM(handle, axes, sp.SYNCHRONOUS, True).
+        for name in ("KillM", "HaltM"):
+            fn = getattr(sp, name, None)
+            if fn is not None:
+                fn(self.handle, terminated(axes), sp.SYNCHRONOUS, True)
+                return
+        for name in ("Kill", "Halt"):
+            fn = getattr(sp, name, None)
+            if fn is not None:
+                for axis in axes:
+                    fn(self.handle, axis, sp.SYNCHRONOUS, True)
+                return
+        raise RuntimeError(
+            "No halt/kill function found in SPiiPlusPython (tried KillM, "
+            "HaltM, Kill, Halt) — check the ADK version on the rig.")
+
     # -- Feedback --------------------------------------------------------
 
     def get_fposition(self, axis: int) -> float:

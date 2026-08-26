@@ -173,9 +173,14 @@ class LaserController:
         """
         return self._set_output(True)
 
-    def off(self) -> ToggleMetrics:
-        """Disable output and wait until the status confirms it."""
-        return self._set_output(False)
+    def off(self, force: bool = False) -> ToggleMetrics:
+        """Disable output and wait until the status confirms it.
+
+        force=True bypasses the cached-state short-circuit and always POSTs
+        CloseOutput + polls — the safety path (safe_state) must use this,
+        since after a failed toggle the cache may be stale/unknown.
+        """
+        return self._set_output(False, force=force)
 
     def set_attenuator(self, percentage: float) -> None:
         """Set target attenuator percentage (0..100).
@@ -205,37 +210,45 @@ class LaserController:
 
     # -- Internals -------------------------------------------------------
 
-    def _set_output(self, enable: bool) -> ToggleMetrics:
-        if self._state.output_enabled is enable:
+    def _set_output(self, enable: bool, force: bool = False) -> ToggleMetrics:
+        if not force and self._state.output_enabled is enable:
             metrics = ToggleMetrics()
             self._state.last_toggle = metrics
             return metrics
 
-        t0 = time.perf_counter()
-        if enable:
-            self._http.enable_output()
-        else:
-            self._http.close_output()
-        post_ms = (time.perf_counter() - t0) * 1000
+        # From the moment we attempt the POST the physical state is uncertain:
+        # any failure below poisons the cache to None (unknown) so no later
+        # on()/off() can short-circuit on stale state. The firmware may have
+        # accepted an ON POST even though our settle poll failed.
+        try:
+            t0 = time.perf_counter()
+            if enable:
+                self._http.enable_output()
+            else:
+                self._http.close_output()
+            post_ms = (time.perf_counter() - t0) * 1000
 
-        # Poll IsOutputEnabled until it matches the requested state.
-        settle_start = time.perf_counter()
-        polls = 0
-        deadline = settle_start + self._settle_timeout_s
-        while True:
-            polls += 1
-            s = self._http.get_status()
-            if bool(s["IsOutputEnabled"]) is enable:
-                break
-            if time.perf_counter() >= deadline:
-                raise TimeoutError(
-                    f"Laser did not reach IsOutputEnabled={enable} in "
-                    f"{self._settle_timeout_s:.2f}s "
-                    f"(state={s.get('ActualStateName')!r})"
-                )
-            if self._poll_interval_s > 0:
-                time.sleep(self._poll_interval_s)
-        settle_ms = (time.perf_counter() - settle_start) * 1000
+            # Poll IsOutputEnabled until it matches the requested state.
+            settle_start = time.perf_counter()
+            polls = 0
+            deadline = settle_start + self._settle_timeout_s
+            while True:
+                polls += 1
+                s = self._http.get_status()
+                if bool(s["IsOutputEnabled"]) is enable:
+                    break
+                if time.perf_counter() >= deadline:
+                    raise TimeoutError(
+                        f"Laser did not reach IsOutputEnabled={enable} in "
+                        f"{self._settle_timeout_s:.2f}s "
+                        f"(state={s.get('ActualStateName')!r})"
+                    )
+                if self._poll_interval_s > 0:
+                    time.sleep(self._poll_interval_s)
+            settle_ms = (time.perf_counter() - settle_start) * 1000
+        except Exception:
+            self._state.output_enabled = None  # unknown — never trust it again
+            raise
 
         self._state.output_enabled = enable
         metrics = ToggleMetrics(post_ms=post_ms, settle_ms=settle_ms,
