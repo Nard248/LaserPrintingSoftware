@@ -1,0 +1,29 @@
+# ============================================================
+# Labgate 2PP Control Platform - Docker Compose
+# ============================================================
+name: laser-printing-labgate
+
+services:
+  labgate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: labgate_platform
+    ports:
+      - "8523:8523"
+    environment:
+      - LABGATE_HOST=0.0.0.0
+      - LABGATE_PORT=8523
+      - LABGATE_CONFIG=config/default.yaml
+    volumes:
+      # Persist experiment plans, telemetry logs, audit ledger, and 3D STL models across restarts
+      - ./labgate_data:/app/labgate_data
+      # Mount config folder to allow editing tokens.yaml and default.yaml without rebuilding image
+      - ./config:/app/config
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8523/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

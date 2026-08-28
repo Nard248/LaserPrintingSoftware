@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(py -0)"
+      "Bash(py -0)",
+      "Bash(python3 -c \"import fastapi, pydantic, pytest; print\\('fastapi', fastapi.__version__, '| pydantic', pydantic.__version__, '| pytest', pytest.__version__\\)\")",
+      "Bash(.venv/bin/python -m pytest tests/ -q)"
     ]
   }
 }

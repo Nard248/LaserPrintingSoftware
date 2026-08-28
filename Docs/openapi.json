@@ -1,0 +1,1390 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "labgate \u2014 2PP Lab Control Platform",
+    "description": "\nDeterministic control platform for the 2PP laser fabrication rig.\n\nLifecycle: draft -> validated -> approved -> queued -> running -> completed.\nA plan is a declarative Experiment Specification; it is validated against\nhard bounds, dry-runnable without hardware, approved by a qualified human\n(never its own proposer), executed by the platform's deterministic engine,\nand fully audited. AI planners are ordinary clients of this API.\n",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Check system health",
+        "description": "Check system liveness, version, and platform mode (sim or rig).",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Gethealth"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/capabilities": {
+      "get": {
+        "summary": "Get hardware capabilities",
+        "description": "Query machine-readable grounding bounds, devices, and operations supported by this rig.",
+        "operationId": "getCapabilities",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Getcapabilities"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/devices": {
+      "get": {
+        "summary": "Get device states",
+        "description": "Get real-time live connection status and coordinates for all active devices.",
+        "operationId": "getDevices",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Getdevices"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/plans": {
+      "get": {
+        "summary": "List experiment plans",
+        "description": "List summaries of all submitted experiment plans and their status.",
+        "operationId": "listPlans",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PlanSummary"
+                  },
+                  "type": "array",
+                  "title": "Response Listplans"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "Submit experiment plan",
+        "description": "Submit a declarative Experiment Specification for validation and approval. Auto-runs validation checks.",
+        "operationId": "submitPlan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitPlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/plans/{plan_id}": {
+      "get": {
+        "summary": "Get plan details",
+        "description": "Get full plan record including validation report, state, and identity history.",
+        "operationId": "getPlan",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Getplan"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plans/{plan_id}/dry-run": {
+      "post": {
+        "summary": "Dry run & preview plan",
+        "description": "Estimate motion distance, duration, and render toolpath preview PNG for approval.",
+        "operationId": "dryRunPlan",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Dryrunplan"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plans/{plan_id}/rerun": {
+      "post": {
+        "summary": "Clone & rerun plan",
+        "description": "Clone an existing plan's recipe into a fresh plan that starts from draft/validated state.",
+        "operationId": "rerunPlan",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plan Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/queue": {
+      "get": {
+        "summary": "Get execution queue",
+        "description": "View current running plan and queued plans in the execution engine.",
+        "operationId": "getQueue",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Getqueue"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/models": {
+      "get": {
+        "summary": "List STL models",
+        "description": "List all uploaded STL 3D models stored on the platform.",
+        "operationId": "listModels",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Listmodels"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "Upload STL model",
+        "description": "Upload a 3D STL mesh model file for print_stl operations.",
+        "operationId": "uploadModel",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_uploadModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Uploadmodel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/models/{model_id}": {
+      "get": {
+        "summary": "Get STL model info",
+        "description": "Get metadata, dimensions, and point count for an uploaded STL model.",
+        "operationId": "getModelInfo",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Model Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Getmodelinfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plans/{plan_id}/approve": {
+      "post": {
+        "summary": "Approve experiment plan",
+        "description": "Human approver authorizes a plan for execution. Enforces proposer != approver.",
+        "operationId": "approvePlan",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plans/{plan_id}/execute": {
+      "post": {
+        "summary": "Execute approved plan",
+        "description": "Enqueue an approved plan for execution on hardware or simulator.",
+        "operationId": "executePlan",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plan Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plans/{plan_id}/abort": {
+      "post": {
+        "summary": "Abort plan execution",
+        "description": "Cooperatively abort a queued or executing plan and immediately safe-state hardware.",
+        "operationId": "abortPlan",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Abortplan"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plans/{plan_id}/results": {
+      "get": {
+        "summary": "Get plan results",
+        "description": "Fetch telemetry events and list of generated artifacts for a completed run.",
+        "operationId": "getPlanResults",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Getplanresults"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plans/{plan_id}/results/artifacts/{name}": {
+      "get": {
+        "summary": "Fetch artifact file",
+        "description": "Download a generated image, toolpath preview, or log artifact file.",
+        "operationId": "getPlanArtifact",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plan Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Body_uploadModel": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_uploadModel"
+      },
+      "CaptureImage": {
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "capture_image",
+            "title": "Op",
+            "default": "capture_image"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "wl_on": {
+            "type": "boolean",
+            "title": "Wl On",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "CaptureImage"
+      },
+      "ExperimentSpec": {
+        "properties": {
+          "spec_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Spec Version",
+            "default": "1.0"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "operations": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SetLaserPower"
+                },
+                {
+                  "$ref": "#/components/schemas/WriteLine"
+                },
+                {
+                  "$ref": "#/components/schemas/WriteArray"
+                },
+                {
+                  "$ref": "#/components/schemas/MoveStage"
+                },
+                {
+                  "$ref": "#/components/schemas/SetWhiteLight"
+                },
+                {
+                  "$ref": "#/components/schemas/CaptureImage"
+                },
+                {
+                  "$ref": "#/components/schemas/Wait"
+                },
+                {
+                  "$ref": "#/components/schemas/WritePowerSweepArray"
+                },
+                {
+                  "$ref": "#/components/schemas/ZStack"
+                },
+                {
+                  "$ref": "#/components/schemas/PrintStl"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "op",
+                "mapping": {
+                  "capture_image": "#/components/schemas/CaptureImage",
+                  "move_stage": "#/components/schemas/MoveStage",
+                  "print_stl": "#/components/schemas/PrintStl",
+                  "set_laser_power": "#/components/schemas/SetLaserPower",
+                  "set_white_light": "#/components/schemas/SetWhiteLight",
+                  "wait": "#/components/schemas/Wait",
+                  "write_array": "#/components/schemas/WriteArray",
+                  "write_line": "#/components/schemas/WriteLine",
+                  "write_power_sweep_array": "#/components/schemas/WritePowerSweepArray",
+                  "z_stack": "#/components/schemas/ZStack"
+                }
+              }
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Operations"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "operations"
+        ],
+        "title": "ExperimentSpec"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "MoveStage": {
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "move_stage",
+            "title": "Op",
+            "default": "move_stage"
+          },
+          "target_mm": {
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Target Mm"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target_mm"
+        ],
+        "title": "MoveStage"
+      },
+      "PlanSummary": {
+        "properties": {
+          "plan_id": {
+            "type": "string",
+            "title": "Plan Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "proposer": {
+            "type": "string",
+            "title": "Proposer"
+          },
+          "approver": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approver"
+          },
+          "validation_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Summary"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "plan_id",
+          "title",
+          "state",
+          "proposer",
+          "approver",
+          "validation_summary",
+          "created_at"
+        ],
+        "title": "PlanSummary"
+      },
+      "PrintStl": {
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "print_stl",
+            "title": "Op",
+            "default": "print_stl"
+          },
+          "model_id": {
+            "type": "string",
+            "title": "Model Id"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "mm",
+              "micron",
+              "nm"
+            ],
+            "title": "Unit",
+            "default": "micron"
+          },
+          "step_size": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Step Size",
+            "description": "discretization step, in `unit`"
+          },
+          "start_position_mm": {
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Start Position Mm"
+          },
+          "attenuator_percent": {
+            "type": "number",
+            "title": "Attenuator Percent"
+          },
+          "velocity_mm_s": {
+            "type": "number",
+            "title": "Velocity Mm S"
+          },
+          "pp_divider": {
+            "type": "integer",
+            "title": "Pp Divider",
+            "default": 1
+          },
+          "repetition_count": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Repetition Count",
+            "default": 1
+          },
+          "is_ablation": {
+            "type": "boolean",
+            "title": "Is Ablation",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "model_id",
+          "step_size",
+          "start_position_mm",
+          "attenuator_percent",
+          "velocity_mm_s"
+        ],
+        "title": "PrintStl",
+        "description": "Print an uploaded STL model. The AI references the model and the\nprocess parameters; slicing into a toolpath happens deterministically\nbelow the trust boundary (labgate.geometry)."
+      },
+      "SetLaserPower": {
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set_laser_power",
+            "title": "Op",
+            "default": "set_laser_power"
+          },
+          "attenuator_percent": {
+            "type": "number",
+            "title": "Attenuator Percent"
+          },
+          "pp_divider": {
+            "type": "integer",
+            "title": "Pp Divider",
+            "default": 1
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "attenuator_percent"
+        ],
+        "title": "SetLaserPower"
+      },
+      "SetWhiteLight": {
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set_white_light",
+            "title": "Op",
+            "default": "set_white_light"
+          },
+          "on": {
+            "type": "boolean",
+            "title": "On"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "on"
+        ],
+        "title": "SetWhiteLight"
+      },
+      "SubmitPlanRequest": {
+        "properties": {
+          "spec": {
+            "$ref": "#/components/schemas/ExperimentSpec"
+          }
+        },
+        "type": "object",
+        "required": [
+          "spec"
+        ],
+        "title": "SubmitPlanRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "Wait": {
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "wait",
+            "title": "Op",
+            "default": "wait"
+          },
+          "seconds": {
+            "type": "number",
+            "title": "Seconds"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "seconds"
+        ],
+        "title": "Wait"
+      },
+      "WriteArray": {
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "write_array",
+            "title": "Op",
+            "default": "write_array"
+          },
+          "x_start_mm": {
+            "type": "number",
+            "title": "X Start Mm"
+          },
+          "x_end_mm": {
+            "type": "number",
+            "title": "X End Mm"
+          },
+          "y_start_mm": {
+            "type": "number",
+            "title": "Y Start Mm"
+          },
+          "y_pitch_mm": {
+            "type": "number",
+            "title": "Y Pitch Mm"
+          },
+          "line_count": {
+            "type": "integer",
+            "title": "Line Count"
+          },
+          "z_mm": {
+            "type": "number",
+            "title": "Z Mm"
+          },
+          "velocity_mm_s": {
+            "type": "number",
+            "title": "Velocity Mm S"
+          },
+          "repetitions": {
+            "type": "integer",
+            "title": "Repetitions",
+            "default": 1
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "x_start_mm",
+          "x_end_mm",
+          "y_start_mm",
+          "y_pitch_mm",
+          "line_count",
+          "z_mm",
+          "velocity_mm_s"
+        ],
+        "title": "WriteArray"
+      },
+      "WriteLine": {
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "write_line",
+            "title": "Op",
+            "default": "write_line"
+          },
+          "start_mm": {
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Start Mm"
+          },
+          "end_mm": {
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "End Mm"
+          },
+          "velocity_mm_s": {
+            "type": "number",
+            "title": "Velocity Mm S"
+          },
+          "repetitions": {
+            "type": "integer",
+            "title": "Repetitions",
+            "default": 1
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "start_mm",
+          "end_mm",
+          "velocity_mm_s"
+        ],
+        "title": "WriteLine"
+      },
+      "WritePowerSweepArray": {
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "write_power_sweep_array",
+            "title": "Op",
+            "default": "write_power_sweep_array"
+          },
+          "x_start_mm": {
+            "type": "number",
+            "title": "X Start Mm"
+          },
+          "x_end_mm": {
+            "type": "number",
+            "title": "X End Mm"
+          },
+          "y_start_mm": {
+            "type": "number",
+            "title": "Y Start Mm"
+          },
+          "y_pitch_mm": {
+            "type": "number",
+            "title": "Y Pitch Mm"
+          },
+          "attenuator_percent_per_line": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Attenuator Percent Per Line"
+          },
+          "z_mm": {
+            "type": "number",
+            "title": "Z Mm"
+          },
+          "velocity_mm_s": {
+            "type": "number",
+            "title": "Velocity Mm S"
+          },
+          "pp_divider": {
+            "type": "integer",
+            "title": "Pp Divider",
+            "default": 1
+          },
+          "repetitions": {
+            "type": "integer",
+            "title": "Repetitions",
+            "default": 1
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "x_start_mm",
+          "x_end_mm",
+          "y_start_mm",
+          "y_pitch_mm",
+          "attenuator_percent_per_line",
+          "z_mm",
+          "velocity_mm_s"
+        ],
+        "title": "WritePowerSweepArray",
+        "description": "Parallel lines where each line gets its own attenuator setting \u2014\nthe lab's line-DOE / power-sweep workflow as one validated unit."
+      },
+      "ZStack": {
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "z_stack",
+            "title": "Op",
+            "default": "z_stack"
+          },
+          "x_start_mm": {
+            "type": "number",
+            "title": "X Start Mm"
+          },
+          "x_end_mm": {
+            "type": "number",
+            "title": "X End Mm"
+          },
+          "y_start_mm": {
+            "type": "number",
+            "title": "Y Start Mm"
+          },
+          "y_pitch_mm": {
+            "type": "number",
+            "title": "Y Pitch Mm"
+          },
+          "z_start_mm": {
+            "type": "number",
+            "title": "Z Start Mm"
+          },
+          "z_step_mm": {
+            "type": "number",
+            "title": "Z Step Mm"
+          },
+          "z_count": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Z Count"
+          },
+          "start_power_percent": {
+            "type": "number",
+            "title": "Start Power Percent"
+          },
+          "end_power_percent": {
+            "type": "number",
+            "title": "End Power Percent"
+          },
+          "power_step_percent": {
+            "type": "number",
+            "title": "Power Step Percent"
+          },
+          "velocity_mm_s": {
+            "type": "number",
+            "title": "Velocity Mm S"
+          },
+          "pp_divider": {
+            "type": "integer",
+            "title": "Pp Divider",
+            "default": 1
+          },
+          "repetitions": {
+            "type": "integer",
+            "title": "Repetitions",
+            "default": 1
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "x_start_mm",
+          "x_end_mm",
+          "y_start_mm",
+          "y_pitch_mm",
+          "z_start_mm",
+          "z_step_mm",
+          "z_count",
+          "start_power_percent",
+          "end_power_percent",
+          "power_step_percent",
+          "velocity_mm_s"
+        ],
+        "title": "ZStack",
+        "description": "2PP polymerization-threshold workflow: at each power level, a stack\nof z_count lines stepping Z at fixed Y; Y shifts by y_pitch per power.\nUnlike the legacy generator, end_power_percent is INCLUSIVE."
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "Token",
+        "description": "Bearer token identifying the operator or approver user identity"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8523",
+      "description": "Local Labgate API Server"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ]
+}
