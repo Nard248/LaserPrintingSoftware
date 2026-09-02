@@ -67,4 +67,4 @@ labgate:
   storage_dir: "labgate_data"
   # YAML file mapping bearer tokens -> identities/roles.
   # See config/tokens.example.yaml; never commit real tokens.
-  tokens_file: null
+  tokens_file: "config/tokens.yaml"
