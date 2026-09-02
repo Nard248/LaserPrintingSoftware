@@ -25,6 +25,5 @@ Thumbs.db
 # Docs - ignore everything except the technical guide and project docs
 
 labgate_data/
-config/tokens.yaml
 scripts/docs/fig/
 /Docs/Archive Folder/

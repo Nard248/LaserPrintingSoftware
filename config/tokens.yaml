@@ -1,0 +1,21 @@
+# labgate bearer tokens — LOCAL ONLY, gitignored, never commit.
+# Regenerate any line with:
+#   python -c "import secrets; print(secrets.token_urlsafe(24))"
+#
+# Roles: operator = propose + execute · approver = approve OTHERS' plans
+#        admin    = both, plus token management
+# NOTE: approval is refused when approver.user_id == proposer.user_id,
+# so the operator and the approver must be DIFFERENT people.
+tokens:
+  R3P3EZ5vgiigeujDSrd6pXVDLSyankOb:
+    user_id: darina
+    display_name: "Darina (2PP experiments)"
+    roles: [operator]
+  gICdnpt0olGmq9fPLZJ5tTvjEynrzXQP:
+    user_id: tatevik
+    display_name: "Tatevik (qualified approver)"
+    roles: [approver]
+  XX4Hyr2ScmA9ttF4X547xNZ1-ob5SKoE:
+    user_id: narek
+    display_name: "Narek (platform admin)"
+    roles: [admin]
