@@ -132,6 +132,10 @@ def _coerce_one(action: str, p: ParamSpec, value: Any) -> Any:
             raise ValidationFailed(
                 f"{action}.{p.name}: {number} above maximum {p.max}"
                 + (f" {p.unit}" if p.unit else ""))
+        if p.allowed is not None and number not in p.allowed:
+            raise ValidationFailed(
+                f"{action}.{p.name}: {number} is not one of "
+                f"{[int(v) if float(v).is_integer() else v for v in p.allowed]}")
         return number
 
     raise ValidationFailed(f"{action}.{p.name}: unsupported parameter type {p.type!r}")

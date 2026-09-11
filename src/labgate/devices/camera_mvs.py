@@ -42,6 +42,27 @@ DEFAULT_SDK_PATHS = [
 
 AUTO_EXPOSURE_MODES = {"off": 0, "once": 1, "continuous": 2}
 
+#: The SDK spells its constants PixelType_Gvsp_RGB8_Packed, while humans (and
+#: the MVS GUI) write "RGB8Packed". Accept both rather than silently failing
+#: to set the format and then rejecting every frame.
+PIXEL_FORMAT_ALIASES = {
+    "rgb8packed": "RGB8_Packed",
+    "rgb8_packed": "RGB8_Packed",
+    "bgr8packed": "BGR8_Packed",
+    "bgr8_packed": "BGR8_Packed",
+    "mono8": "Mono8",
+}
+
+
+def _pixel_constant(MvCC, name: str):
+    """Resolve a configured pixel-format name to its SDK constant."""
+    canonical = PIXEL_FORMAT_ALIASES.get(str(name).strip().lower(), str(name).strip())
+    for candidate in (canonical, canonical.replace("_", "")):
+        value = getattr(MvCC, f"PixelType_Gvsp_{candidate}", None)
+        if value is not None:
+            return value
+    return None
+
 
 def _sdk_dir(cfg_path: str | None) -> str | None:
     """First existing candidate: explicit config, then MVS_PATH, then defaults."""
@@ -198,19 +219,41 @@ class MvsCamera(DeviceAdapter):
             self._resolution = (width, height)
 
     def _apply_config(self, MvCC) -> None:
+        """Apply configured settings, checking every return code.
+
+        Silently dropping a rejected value would leave the camera in some
+        other state while connect() still reported success — captures would
+        then run at the wrong exposure with nothing anywhere saying so.
+        """
         section = self._section
         mode = str(section.get("auto_exposure", "off")).lower()
-        if mode in AUTO_EXPOSURE_MODES:
-            self._cam.MV_CC_SetEnumValue("ExposureAuto", AUTO_EXPOSURE_MODES[mode])
+        if mode not in AUTO_EXPOSURE_MODES:
+            raise DeviceError(
+                f"camera.auto_exposure must be one of "
+                f"{sorted(AUTO_EXPOSURE_MODES)}, got {mode!r}")
+        self._check(self._cam.MV_CC_SetEnumValue("ExposureAuto",
+                                                 AUTO_EXPOSURE_MODES[mode]),
+                    "SetEnumValue(ExposureAuto)")
         if mode == "off" and section.get("exposure_time_us") is not None:
-            self._cam.MV_CC_SetFloatValue("ExposureTime",
-                                          float(section["exposure_time_us"]))
+            self._check(
+                self._cam.MV_CC_SetFloatValue(
+                    "ExposureTime", float(section["exposure_time_us"])),
+                f"SetFloatValue(ExposureTime={section['exposure_time_us']}) "
+                f"— permitted range {self._exposure_range}")
         if section.get("gain_db") is not None:
-            self._cam.MV_CC_SetFloatValue("Gain", float(section["gain_db"]))
-        pixel = str(section.get("pixel_format", "RGB8Packed"))
-        value = getattr(MvCC, f"PixelType_Gvsp_{pixel}", None)
-        if value is not None:
-            self._cam.MV_CC_SetEnumValue("PixelFormat", value)
+            self._check(
+                self._cam.MV_CC_SetFloatValue("Gain", float(section["gain_db"])),
+                f"SetFloatValue(Gain={section['gain_db']}) "
+                f"— permitted range {self._gain_range}")
+
+        pixel = section.get("pixel_format", "RGB8Packed")
+        value = _pixel_constant(MvCC, pixel)
+        if value is None:
+            raise DeviceError(
+                f"unknown camera.pixel_format {pixel!r}; expected one of "
+                f"{sorted(set(PIXEL_FORMAT_ALIASES.values()))}")
+        self._check(self._cam.MV_CC_SetEnumValue("PixelFormat", value),
+                    f"SetEnumValue(PixelFormat={pixel})")
 
     def _get_float(self, MvCC, key: str, full: bool = False):
         holder = MvCC.MVCC_FLOATVALUE()

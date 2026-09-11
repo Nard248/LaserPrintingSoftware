@@ -30,6 +30,10 @@ class ParamSpec(BaseModel):
     required: bool = True
     #: Permitted values for a `str` parameter, e.g. an enum from the SDK.
     choices: list[str] | None = None
+    #: Permitted values for a numeric parameter. Use where the range is not
+    #: contiguous — axis ids [0, 2] must not admit 1 just because it lies
+    #: between them.
+    allowed: list[float] | None = None
 
 
 class Capability(BaseModel):

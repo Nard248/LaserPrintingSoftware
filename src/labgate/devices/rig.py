@@ -265,7 +265,8 @@ class RigLaser(DeviceAdapter):
         self.device_id = device_id
         self._cfg = cfg
         self._controller = None
-        self.output_on = False
+        #: True / False / None, where None means "unknown — assume live".
+        self.output_on: bool | None = False
 
     @property
     def controller(self):
@@ -276,12 +277,19 @@ class RigLaser(DeviceAdapter):
         return SimLaser(self._cfg, self.device_id).capabilities()
 
     def state(self) -> DeviceState:
+        """`output_on` may be None, meaning UNKNOWN.
+
+        LaserController.is_on returns None exactly when a failed toggle
+        poisoned its cache — the firmware may have accepted an ON POST whose
+        settle poll then failed. Collapsing that into False would let the
+        motion interlock read "beam off" and permit a move under a live beam,
+        which is the precise situation the interlock exists for. Pass the
+        None straight through and let DeviceControl treat it as possibly-on.
+        """
         if self._controller is not None:
-            # Live cached value from the controller — SyncExposure toggles the
-            # beam through the controller directly, bypassing this adapter.
-            live = self._controller.is_on
-            if live is not None:
-                self.output_on = bool(live)
+            # Live value from the controller — SyncExposure toggles the beam
+            # through the controller directly, bypassing this adapter.
+            self.output_on = self._controller.is_on   # may legitimately be None
         return DeviceState(device_id=self.device_id, kind=self.kind,
                            connected=self._controller is not None,
                            detail={"output_on": self.output_on})
@@ -294,7 +302,7 @@ class RigLaser(DeviceAdapter):
         controller = LaserController.from_config(self._cfg.hardware.get("laser", {}))
         controller.connect()  # reads real hardware state into the cache
         self._controller = controller
-        self.output_on = bool(controller.is_on)
+        self.output_on = controller.is_on   # None = unknown, never coerce
 
     def disconnect(self) -> None:
         if self._controller is None:
@@ -436,10 +444,12 @@ class RigLaser(DeviceAdapter):
             severity="warning" if warnings else "info",
             detail=f"firmware warnings: {warnings}" if warnings else "no warnings"))
 
-        # The states that need a hand on the hardware — a key switch or an
-        # interlock is not something the API can resolve for you.
-        needs_hands = state and any(
-            token in str(state).lower() for token in ("key", "interlock", "off"))
+        # Only a key switch or an interlock genuinely needs hands. Matching
+        # "off" anywhere would flag ordinary idle names like "Emission off"
+        # as a blocker and make preflight claim the rig is unusable when the
+        # laser is merely not emitting.
+        lowered = str(state or "").lower()
+        needs_hands = any(token in lowered for token in ("key", "interlock"))
         checks.append(CheckResult(
             check="laser.state", ok=not needs_hands,
             severity="blocker" if needs_hands else "info",
@@ -448,12 +458,15 @@ class RigLaser(DeviceAdapter):
                     "interlock, then re-check") if needs_hands else "",
             manual=bool(needs_hands)))
 
+        live = self._controller.is_on
         checks.append(CheckResult(
-            check="laser.output_off", ok=not bool(self._controller.is_on),
-            severity="warning" if self._controller.is_on else "info",
-            detail="output is ON" if self._controller.is_on else "output is off",
-            remedy=f"POST /devices/{self.device_id}/actions/output_off"
-                   if self._controller.is_on else ""))
+            check="laser.output_off", ok=live is False,
+            severity="warning" if live is not False else "info",
+            detail=("output is off" if live is False
+                    else "output is ON" if live
+                    else "output state is UNKNOWN — a toggle failed; treated as live"),
+            remedy=(f"POST /devices/{self.device_id}/actions/output_off"
+                    if live is not False else "")))
         return checks
 
 

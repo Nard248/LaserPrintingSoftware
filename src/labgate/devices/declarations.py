@@ -13,8 +13,12 @@ from .base import ParamSpec
 
 
 def _axis_param(axes: list[int]) -> ParamSpec:
+    """Membership, not a range: a configuration of axes [0, 2] must not admit
+    axis 1 simply because it falls between the endpoints. Letting it through
+    only defers the failure to an IndexError deep in the adapter, which
+    surfaces as a 500 instead of a 422."""
     return ParamSpec(name="axis", type="int", unit="",
-                     min=min(axes), max=max(axes),
+                     min=min(axes), max=max(axes), allowed=[float(a) for a in axes],
                      description="0 = X, 1 = Y, 2 = Z")
 
 

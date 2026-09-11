@@ -255,6 +255,8 @@ def create_app(cfg: LabgateConfig | None = None) -> FastAPI:
                        identity: Identity = Depends(current_identity)) -> dict:
         require_role(identity, Role.OPERATOR)
         adapter = _adapter_or_404(device_id)
+        # connect() homes the stage on the rig — guard it like any other move
+        platform.devicectl.guard_lifecycle(device_id, identity, "connect")
         adapter.connect()
         platform.audit.append("device_connect", identity.user_id,
                               {"device_id": device_id})
@@ -267,10 +269,8 @@ def create_app(cfg: LabgateConfig | None = None) -> FastAPI:
                           identity: Identity = Depends(current_identity)) -> dict:
         require_role(identity, Role.OPERATOR)
         adapter = _adapter_or_404(device_id)
-        if platform.devicectl._run_is_active():
-            raise TransitionError(
-                "a plan is running or queued; disconnecting now would pull the rig "
-                "out from under it")
+        # disconnect() homes the stage before closing the link — same guard
+        platform.devicectl.guard_lifecycle(device_id, identity, "disconnect")
         adapter.disconnect()
         platform.audit.append("device_disconnect", identity.user_id,
                               {"device_id": device_id})
@@ -371,19 +371,45 @@ def create_app(cfg: LabgateConfig | None = None) -> FastAPI:
         require_role(identity, Role.OPERATOR)
         platform.audit.append("estop", identity.user_id, {})
         aborted, errors = [], []
+
+        def safe_state_all() -> None:
+            for adapter in platform.engine._ordered_adapters():
+                try:
+                    adapter.safe_state()
+                except Exception as exc:  # noqa: BLE001 — report, never mask
+                    errors.append(f"{adapter.device_id}: {exc}")
+
+        # 1. shut the beam NOW, before anything else.
+        safe_state_all()
+
+        # 2. ask the run to stop, then WAIT for it. Abort is cooperative: the
+        # executor only notices between repetitions, and until it does it can
+        # re-open the shutter we just closed.
         snapshot = platform.engine.queue_snapshot()
-        for plan_id in filter(None, [snapshot.get("running"), *(snapshot.get("queued") or [])]):
+        for plan_id in filter(None, [snapshot.get("running"),
+                                     *(snapshot.get("queued") or [])]):
             try:
                 platform.engine.abort(plan_id, identity.user_id)
                 aborted.append(plan_id)
-            except Exception as exc:  # noqa: BLE001 — report, never mask
-                errors.append(f"abort {plan_id}: {exc}")
-        for adapter in platform.engine._ordered_adapters():
-            try:
-                adapter.safe_state()
+            except TransitionError:
+                # finished between the snapshot and the abort — that is success
+                pass
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"{adapter.device_id}: {exc}")
-        return {"ok": not errors, "aborted_plans": aborted, "errors": errors,
+                errors.append(f"abort {plan_id}: {exc}")
+        for plan_id in aborted:
+            platform.engine.wait(plan_id, timeout_s=15.0)
+
+        # 3. safe-state again: the run may have re-opened the shutter between
+        # steps 1 and 2 before it observed the abort flag.
+        safe_state_all()
+
+        still_running = platform.engine.queue_snapshot().get("running")
+        if still_running:
+            errors.append(
+                f"plan {still_running} did not stop within 15 s — the beam has been "
+                "closed, but use the physical e-stop if anything is still moving")
+        return {"ok": not errors, "aborted_plans": aborted,
+                "still_running": still_running, "errors": errors,
                 "devices": [s.model_dump() for s in platform.registry.device_states()]}
 
     @app.post("/plans", status_code=201, operation_id="submitPlan", summary="Submit experiment plan", description="Submit a declarative Experiment Specification for validation and approval. Auto-runs validation checks.")

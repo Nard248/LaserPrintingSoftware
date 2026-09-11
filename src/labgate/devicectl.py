@@ -99,6 +99,36 @@ class DeviceControl:
         return True if value is None else bool(value)
 
     # ------------------------------------------------------------------
+    def guard_lifecycle(self, device_id: str, identity: Identity,
+                        operation: str) -> bool:
+        """Gate connect/disconnect, which are motion commands in disguise.
+
+        StageController.connect() enables the axes and drives an unchecked
+        move to [0, 0, 0]; disconnect() homes before closing the link. Those
+        are full-travel traverses, so they need the same beam interlock the
+        declared motion actions carry — otherwise bringing a device up with
+        the shutter open would scribe a line across the sample.
+
+        Returns True when an admin overrode the beam interlock.
+        """
+        if self._run_is_active():
+            raise TransitionError(
+                f"a plan is running or queued; '{operation}' is refused while the "
+                "execution engine owns the rig (abort it first, or wait)")
+        adapter = self._registry.adapter(device_id)
+        if adapter.kind != "stage" or not self._beam_is_on():
+            return False
+        if not identity.has_role(Role.ADMIN):
+            raise DeviceError(
+                f"laser output is on (or its state is unknown); '{operation}' moves "
+                f"the stage and is refused until the beam is confirmed off")
+        self._audit.append("interlock_override", identity.user_id, {
+            "device_id": device_id, "action": operation,
+            "interlock": "blocked_when_beam_on",
+            "reason": "admin running device lifecycle with the beam live"})
+        return True
+
+    # ------------------------------------------------------------------
     def invoke(self, device_id: str, action: str, params: dict[str, Any],
                identity: Identity) -> ActionResult:
         adapter = self._registry.adapter(device_id)
@@ -169,7 +199,11 @@ class DeviceControl:
         kwargs = coerce_and_validate(spec, params or {})
         fn = bind(adapter, spec)
 
-        # 8. execute under the device lock
+        # 8. execute. Stop paths deliberately do NOT take the device lock:
+        # the executor holds it for an entire line traverse (all repetitions),
+        # so acquiring it here would make `halt` and `output_off` wait for the
+        # exposure they are trying to interrupt. A stop that queues behind the
+        # thing it is stopping is not a stop.
         if overrode_beam_interlock:
             self._audit.append("interlock_override", identity.user_id, {
                 "device_id": device_id, "action": action,
@@ -181,8 +215,11 @@ class DeviceControl:
                 "note": "shutter opened outside an approved plan"})
         self._audit_attempt(spec, device_id, action, identity, kwargs)
         try:
-            with self._lock_for(device_id):
-                data = fn(**kwargs)
+            if spec.always_allowed:
+                data = fn(**kwargs)          # pre-empt; no lock
+            else:
+                with self._lock_for(device_id):
+                    data = fn(**kwargs)
         except Exception as exc:
             if spec.tier is not ActionTier.READ:
                 self._audit.append("device_action_failed", identity.user_id, {
