@@ -619,6 +619,118 @@ environment = {
     "_postman_variable_scope": "environment"
 }
 
+
+# ---------------------------------------------------------------------------
+# Device control plane & diagnostics. Plans cover experiments; these cover
+# bringing the rig up, aligning it and diagnosing it.
+# ---------------------------------------------------------------------------
+
+def _req(method, path_parts, description, body=None, auth_token=None):
+    request = {
+        "method": method,
+        "header": ([{"key": "Content-Type", "value": "application/json"}]
+                   if body is not None else []),
+        "url": {
+            "raw": "{{baseUrl}}/" + "/".join(path_parts),
+            "host": ["{{baseUrl}}"],
+            "path": list(path_parts),
+        },
+        "description": description,
+    }
+    if body is not None:
+        request["body"] = {"mode": "raw", "raw": json.dumps(body, indent=2)}
+    if auth_token:
+        request["auth"] = {"type": "bearer",
+                           "bearer": [{"key": "token", "value": auth_token,
+                                       "type": "string"}]}
+    return request
+
+
+device_folder = {
+    "name": "06 - Device Control & Diagnostics",
+    "description": ("Interactive control: bring the rig up, home and jog the "
+                    "stage, read laser firmware status, snapshot the camera, "
+                    "and check readiness. Governed by risk tier rather than by "
+                    "plan approval; the shutter stays plan-only."),
+    "item": [
+        {"name": "Preflight - Am I Ready To Run?",
+         "request": _req("GET", ["system", "preflight"],
+                         "Aggregated readiness checklist. Every failing check "
+                         "carries a remedy; those flagged 'manual' need hands "
+                         "on the instrument (e.g. a key switch).")},
+        {"name": "System Status",
+         "request": _req("GET", ["system", "status"],
+                         "Mode, version, uptime, policy, per-device rollup, "
+                         "queue depth and storage.")},
+        {"name": "Device Detail",
+         "request": _req("GET", ["devices", "stage"],
+                         "Live state plus declared plan capabilities and "
+                         "device actions for one device.")},
+        {"name": "List Device Actions",
+         "request": _req("GET", ["devices", "stage", "actions"],
+                         "Declared actions with tiers, parameters and bounds.")},
+        {"name": "Diagnose Device",
+         "request": _req("POST", ["devices", "stage", "diagnose"],
+                         "Read-only self-test: reachability, driver presence, "
+                         "axis enable state. Never actuates.")},
+        {"name": "Connect Stage",
+         "request": _req("POST", ["devices", "stage", "connect"],
+                         "Open the SPiiPlus link; enables and commutates the "
+                         "servo axes as part of bring-up.")},
+        {"name": "Enable Stage Axes",
+         "request": _req("POST", ["devices", "stage", "actions", "enable_axes"],
+                         "Re-enable and commutate the axes after a fault, "
+                         "without tearing down the link.", body={"params": {}})},
+        {"name": "Home Stage",
+         "request": _req("POST", ["devices", "stage", "actions", "home"],
+                         "Move to [0, 0, 0].", body={"params": {}})},
+        {"name": "Jog Stage (Z +0.1 mm)",
+         "request": _req("POST", ["devices", "stage", "actions", "jog"],
+                         "Nudge one axis. Bounded by the interactive clamp and "
+                         "refused while the beam is on.",
+                         body={"params": {"axis": 2, "distance_mm": 0.1}})},
+        {"name": "Set Stage Velocity",
+         "request": _req("POST", ["devices", "stage", "actions", "set_velocity"],
+                         "Standing velocity for subsequent moves.",
+                         body={"params": {"velocity_mm_s": 3.0}})},
+        {"name": "Halt Stage",
+         "request": _req("POST", ["devices", "stage", "actions", "halt"],
+                         "Stop all axes. Never interlocked out.",
+                         body={"params": {}})},
+        {"name": "Laser Firmware Status",
+         "request": _req("POST", ["devices", "laser", "actions", "status"],
+                         "State name, measured power and frequency, plus any "
+                         "errors or warnings the laser reports.",
+                         body={"params": {}})},
+        {"name": "Set Laser Power (arm only)",
+         "request": _req("POST", ["devices", "laser", "actions", "set_power"],
+                         "Set attenuator and divider. Does NOT open the shutter.",
+                         body={"params": {"attenuator_percent": 30,
+                                          "pp_divider": 1}})},
+        {"name": "Laser Output Off",
+         "request": _req("POST", ["devices", "laser", "actions", "output_off"],
+                         "Force the output closed and confirm it.",
+                         body={"params": {}})},
+        {"name": "Camera Snapshot",
+         "request": _req("POST", ["devices", "camera", "actions", "snapshot"],
+                         "Grab one frame; returns a URL under /snapshots.",
+                         body={"params": {"label": "alignment"}})},
+        {"name": "Camera Settings",
+         "request": _req("POST", ["devices", "camera", "actions", "settings"],
+                         "Exposure, gain, resolution and their permitted ranges.",
+                         body={"params": {}})},
+        {"name": "Set Camera Exposure",
+         "request": _req("POST", ["devices", "camera", "actions", "set_exposure"],
+                         "Set exposure time; turns auto-exposure off.",
+                         body={"params": {"exposure_time_us": 30000}})},
+        {"name": "EMERGENCY STOP",
+         "request": _req("POST", ["system", "estop"],
+                         "Abort any running plan and safe-state every device, "
+                         "laser first.")},
+    ],
+}
+collection["item"].append(device_folder)
+
 for target_dir in [Path("postman"), Path("Docs/postman")]:
     target_dir.mkdir(parents=True, exist_ok=True)
     (target_dir / "labgate.postman_collection.json").write_text(json.dumps(collection, indent=2))

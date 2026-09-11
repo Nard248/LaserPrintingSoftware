@@ -592,6 +592,460 @@
           }
         }
       ]
+    },
+    {
+      "name": "06 - Device Control & Diagnostics",
+      "description": "Interactive control: bring the rig up, home and jog the stage, read laser firmware status, snapshot the camera, and check readiness. Governed by risk tier rather than by plan approval; the shutter stays plan-only.",
+      "item": [
+        {
+          "name": "Preflight - Am I Ready To Run?",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/system/preflight",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "system",
+                "preflight"
+              ]
+            },
+            "description": "Aggregated readiness checklist. Every failing check carries a remedy; those flagged 'manual' need hands on the instrument (e.g. a key switch)."
+          }
+        },
+        {
+          "name": "System Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/system/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "system",
+                "status"
+              ]
+            },
+            "description": "Mode, version, uptime, policy, per-device rollup, queue depth and storage."
+          }
+        },
+        {
+          "name": "Device Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/devices/stage",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "stage"
+              ]
+            },
+            "description": "Live state plus declared plan capabilities and device actions for one device."
+          }
+        },
+        {
+          "name": "List Device Actions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/devices/stage/actions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "stage",
+                "actions"
+              ]
+            },
+            "description": "Declared actions with tiers, parameters and bounds."
+          }
+        },
+        {
+          "name": "Diagnose Device",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/devices/stage/diagnose",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "stage",
+                "diagnose"
+              ]
+            },
+            "description": "Read-only self-test: reachability, driver presence, axis enable state. Never actuates."
+          }
+        },
+        {
+          "name": "Connect Stage",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/devices/stage/connect",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "stage",
+                "connect"
+              ]
+            },
+            "description": "Open the SPiiPlus link; enables and commutates the servo axes as part of bring-up."
+          }
+        },
+        {
+          "name": "Enable Stage Axes",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices/stage/actions/enable_axes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "stage",
+                "actions",
+                "enable_axes"
+              ]
+            },
+            "description": "Re-enable and commutate the axes after a fault, without tearing down the link.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"params\": {}\n}"
+            }
+          }
+        },
+        {
+          "name": "Home Stage",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices/stage/actions/home",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "stage",
+                "actions",
+                "home"
+              ]
+            },
+            "description": "Move to [0, 0, 0].",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"params\": {}\n}"
+            }
+          }
+        },
+        {
+          "name": "Jog Stage (Z +0.1 mm)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices/stage/actions/jog",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "stage",
+                "actions",
+                "jog"
+              ]
+            },
+            "description": "Nudge one axis. Bounded by the interactive clamp and refused while the beam is on.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"params\": {\n    \"axis\": 2,\n    \"distance_mm\": 0.1\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Set Stage Velocity",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices/stage/actions/set_velocity",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "stage",
+                "actions",
+                "set_velocity"
+              ]
+            },
+            "description": "Standing velocity for subsequent moves.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"params\": {\n    \"velocity_mm_s\": 3.0\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Halt Stage",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices/stage/actions/halt",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "stage",
+                "actions",
+                "halt"
+              ]
+            },
+            "description": "Stop all axes. Never interlocked out.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"params\": {}\n}"
+            }
+          }
+        },
+        {
+          "name": "Laser Firmware Status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices/laser/actions/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "laser",
+                "actions",
+                "status"
+              ]
+            },
+            "description": "State name, measured power and frequency, plus any errors or warnings the laser reports.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"params\": {}\n}"
+            }
+          }
+        },
+        {
+          "name": "Set Laser Power (arm only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices/laser/actions/set_power",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "laser",
+                "actions",
+                "set_power"
+              ]
+            },
+            "description": "Set attenuator and divider. Does NOT open the shutter.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"params\": {\n    \"attenuator_percent\": 30,\n    \"pp_divider\": 1\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Laser Output Off",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices/laser/actions/output_off",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "laser",
+                "actions",
+                "output_off"
+              ]
+            },
+            "description": "Force the output closed and confirm it.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"params\": {}\n}"
+            }
+          }
+        },
+        {
+          "name": "Camera Snapshot",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices/camera/actions/snapshot",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "camera",
+                "actions",
+                "snapshot"
+              ]
+            },
+            "description": "Grab one frame; returns a URL under /snapshots.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"params\": {\n    \"label\": \"alignment\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Camera Settings",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices/camera/actions/settings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "camera",
+                "actions",
+                "settings"
+              ]
+            },
+            "description": "Exposure, gain, resolution and their permitted ranges.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"params\": {}\n}"
+            }
+          }
+        },
+        {
+          "name": "Set Camera Exposure",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/devices/camera/actions/set_exposure",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "devices",
+                "camera",
+                "actions",
+                "set_exposure"
+              ]
+            },
+            "description": "Set exposure time; turns auto-exposure off.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"params\": {\n    \"exposure_time_us\": 30000\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "EMERGENCY STOP",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/system/estop",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "system",
+                "estop"
+              ]
+            },
+            "description": "Abort any running plan and safe-state every device, laser first."
+          }
+        }
+      ]
     }
   ]
 }

@@ -70,6 +70,276 @@ paths:
                 title: Response Getdevices
       security:
       - bearerAuth: []
+  /devices/{device_id}:
+    get:
+      summary: Get one device in detail
+      description: Live state, declared plan capabilities and declared device actions.
+      operationId: getDevice
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Device Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Getdevice
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /devices/{device_id}/actions:
+    get:
+      summary: List device actions
+      description: Declared interactive actions with their tiers, parameters and bounds.
+      operationId: listDeviceActions
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Device Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+                title: Response Listdeviceactions
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /devices/{device_id}/connect:
+    post:
+      summary: Connect a device
+      description: Open the link to the instrument. For the stage this also enables
+        and commutates the servo axes.
+      operationId: connectDevice
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Device Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Connectdevice
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /devices/{device_id}/disconnect:
+    post:
+      summary: Disconnect a device
+      description: Safe-state then release the instrument.
+      operationId: disconnectDevice
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Device Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Disconnectdevice
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /devices/{device_id}/diagnose:
+    post:
+      summary: Run a device self-test
+      description: Read-only probe of reachability, driver availability and reported
+        health. Never actuates.
+      operationId: diagnoseDevice
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Device Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Diagnosedevice
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /devices/{device_id}/actions/{action}:
+    post:
+      summary: Invoke a device action
+      description: Run one declared action (home, jog, set_velocity, snapshot, ...).
+        Bounds-checked, interlocked and audited.
+      operationId: invokeDeviceAction
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Device Id
+      - name: action
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Action
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/InvokeActionRequest'
+              - type: 'null'
+              title: Body
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Invokedeviceaction
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /snapshots/{name}:
+    get:
+      summary: Fetch a device snapshot
+      description: Download an image captured by a camera snapshot action.
+      operationId: getSnapshot
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Name
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /system/status:
+    get:
+      summary: Get full system status
+      description: "Mode, version, uptime, policy, per-device rollup, queue depth\
+        \ and storage \u2014 everything at a glance."
+      operationId: getSystemStatus
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Getsystemstatus
+      security:
+      - bearerAuth: []
+  /system/preflight:
+    get:
+      summary: Check readiness to run
+      description: "Aggregated readiness checklist. Each failure carries a remedy\
+        \ \u2014 either an API call, or a physical instruction flagged 'manual'."
+      operationId: getPreflight
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Getpreflight
+      security:
+      - bearerAuth: []
+  /system/estop:
+    post:
+      summary: Emergency stop
+      description: Immediately safe-state every device (laser first, then stage, then
+        illumination) and abort any running plan.
+      operationId: emergencyStop
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Emergencystop
+      security:
+      - bearerAuth: []
   /plans:
     get:
       summary: List experiment plans
@@ -531,6 +801,15 @@ components:
           title: Detail
       type: object
       title: HTTPValidationError
+    InvokeActionRequest:
+      properties:
+        params:
+          additionalProperties: true
+          type: object
+          title: Params
+      type: object
+      title: InvokeActionRequest
+      description: Body for POST /devices/{id}/actions/{action}.
     MoveStage:
       properties:
         op:

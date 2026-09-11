@@ -327,11 +327,85 @@ The code confines this decision to three classes — `PlanStore`, `RunResults`, 
 | `GET /queue` | what is running, what is waiting | any |
 | `POST /models`, `GET /models[/{id}]` | STL upload / inspection | operator / any |
 
+### 9.1  The device control plane
+
+Plans cover experiments. A second set of endpoints covers everything else —
+bringing the rig up, aligning it, diagnosing it — governed by risk tier
+instead of by human approval:
+
+| Tier | Contains | Gate |
+| --- | --- | --- |
+| `read` | status, position, snapshot, settings | any platform role |
+| `prepare` | connect, enable_axes, set velocity/acceleration/jerk, set_power | operator |
+| `motion` | home, jog, move_relative, move_absolute, halt | operator; bounds-checked; refused while the beam is on or a plan is running |
+| `expose` | opening the shutter | not reachable here — plan and approval only |
+
+| Method & path | Purpose | Role |
+| --- | --- | --- |
+| `GET /devices/{id}` | live state, plan capabilities and device actions | any |
+| `GET /devices/{id}/actions` | declared actions with tiers, parameters and bounds | any |
+| `POST /devices/{id}/connect` | open the link; for the stage this also enables and commutates the axes | operator |
+| `POST /devices/{id}/disconnect` | safe-state then release | operator |
+| `POST /devices/{id}/diagnose` | read-only self-test | any |
+| `POST /devices/{id}/actions/{action}` | invoke one declared action | per tier |
+| `GET /snapshots/{name}` | fetch a camera snapshot | any |
+| `GET /system/status` | mode, uptime, policy, device rollup, queue | any |
+| `GET /system/preflight` | readiness checklist with remedies | any |
+| `POST /system/estop` | abort and safe-state everything, laser first | operator |
+
+The invariants, each covered by a test: the shutter is never openable from
+this plane unless `labgate.allow_manual_beam` is set; motion is refused while
+the beam is on *or its state is unknown*; device actions and plan execution
+are mutually exclusive; stop paths (`halt`, `output_off`, `/system/estop`)
+are never interlocked out; parameters are bounds-checked with the same
+discipline as plan operations; every non-`read` action is audited, with
+motion intent recorded *before* it happens.
+
+`GET /system/preflight` is the one to reach for first. Each failing check
+carries a `remedy` — usually an API call, but flagged `manual: true` when it
+needs hands on the instrument, because no software can turn a key switch:
+
+```
+{ "ready": false, "summary": "NOT ready — 2 blocker(s)",
+  "manual_steps": ["laser.state: turn the key switch on the laser head ..."],
+  "checks": [
+    {"check": "stage.axes_enabled", "ok": false, "severity": "blocker",
+     "detail": "servo axes are NOT enabled — no motion is possible",
+     "remedy": "POST /devices/stage/actions/enable_axes"},
+    {"check": "laser.state", "ok": false, "severity": "blocker", "manual": true,
+     "detail": "reported state: KeyOff",
+     "remedy": "turn the key switch on the laser head and clear any enclosure
+                interlock, then re-check"} ] }
+```
+
 Error semantics: 401 missing or unknown token · 403 role missing, or self-approval · 404 unknown plan, model or artifact · 409 illegal lifecycle transition · 422 malformed recipe · 502 device failure. Bound violations are *not* an HTTP error — they produce a stored plan in state `rejected` with a full report, because a refusal is a scientific result worth keeping.
 
 The OpenAPI document is generated automatically at `/openapi.json`, so any client can be code-generated against it. An MCP wrapper (`labgate-mcp`) exposes the same lifecycle as tools for agent frameworks that prefer it; it is a pure HTTP client and adds no authority of its own.
 
 ---
+
+### 9.2  The camera
+
+`MV-CS200-10GC` is a Hikrobot 20 MP GigE colour camera driven by the MVS SDK.
+The vendor ships its Python bindings as loose modules rather than a package,
+so `devices/camera_mvs.py` adds their directory to `sys.path` and imports them
+*inside method bodies* — the same discipline the ACS wheel gets, and the
+reason the platform still starts on a machine with no MVS installed.
+
+SDK lifecycle: `EnumDevices → CreateHandle → OpenDevice → Set*Value →
+StartGrabbing → GetImageBuffer / FreeImageBuffer → StopGrabbing → CloseDevice
+→ DestroyHandle`. Grabbing is left running between snapshots because starting
+a GigE stream costs hundreds of milliseconds.
+
+Two details worth knowing. The declared exposure and gain bounds are read
+from the camera itself via `MV_CC_GetFloatValue` once it is open, so the
+limits an agent sees are the camera's real ones rather than a guess. And
+setting an explicit exposure turns auto-exposure off first — otherwise the
+camera would immediately overwrite the value that was just set.
+
+If the SDK is absent, rig mode substitutes the simulated camera and says so
+in `diagnose()`, rather than refusing to start: a missing camera limits what
+can be done, it does not stop a print.
 
 # 10.  Extending the system
 
