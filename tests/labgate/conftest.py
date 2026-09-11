@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).parent))  # make helpers importable
-from helpers import ALICE, BOB  # noqa: E402
+from helpers import ALICE, BOB, ROOT  # noqa: E402
 
 from labgate.api.app import Platform, create_app
 from labgate.config import LabgateConfig
@@ -31,6 +31,7 @@ def client(cfg):
     tokens = {
         "alice": platform.tokens.issue(ALICE),
         "bob": platform.tokens.issue(BOB),
+        "root": platform.tokens.issue(ROOT),
     }
     client = TestClient(app)
     client.tokens = tokens

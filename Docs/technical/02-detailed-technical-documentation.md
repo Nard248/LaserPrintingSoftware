@@ -338,7 +338,7 @@ instead of by human approval:
 | `read` | status, position, snapshot, settings | any platform role |
 | `prepare` | connect, enable_axes, set velocity/acceleration/jerk, set_power | operator |
 | `motion` | home, jog, move_relative, move_absolute, halt | operator; bounds-checked; refused while the beam is on or a plan is running |
-| `expose` | opening the shutter | not reachable here — plan and approval only |
+| `expose` | opening the shutter (`output_on`) | **`admin` only** — or `operator` when `labgate.allow_manual_beam` is set |
 
 | Method & path | Purpose | Role |
 | --- | --- | --- |
@@ -353,8 +353,16 @@ instead of by human approval:
 | `GET /system/preflight` | readiness checklist with remedies | any |
 | `POST /system/estop` | abort and safe-state everything, laser first | operator |
 
-The invariants, each covered by a test: the shutter is never openable from
-this plane unless `labgate.allow_manual_beam` is set; motion is refused while
+Opening the shutter outside an approved plan is reachable, but only by the
+`admin` role — the rig owner, who must be able to bring an instrument up and
+test it physically. An ordinary operator still cannot fire the laser without
+a second person signing for a plan. Admin also overrides the beam-on motion
+interlock, since a shutter that cannot be followed by a move is useless for
+testing; both are written to the audit log as `beam_opened_manually` and
+`interlock_override`. Admin does *not* override exclusivity with a running
+plan — that is a correctness invariant, not a policy.
+
+The invariants, each covered by a test: `expose` is admin-gated; motion is refused while
 the beam is on *or its state is unknown*; device actions and plan execution
 are mutually exclusive; stop paths (`halt`, `output_off`, `/system/estop`)
 are never interlocked out; parameters are bounds-checked with the same

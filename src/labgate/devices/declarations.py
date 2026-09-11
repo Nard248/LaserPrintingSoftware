@@ -104,7 +104,8 @@ def stage_actions(range_lo: float, range_hi: float, v_min: float, v_max: float,
 
 def laser_actions(att_lo: float, att_hi: float, divider_min: int,
                   allow_manual_beam: bool = False) -> list[ActionSpec]:
-    """Laser control minus the one thing that needs approval: firing it."""
+    """Laser control. Firing it is declared, but reachable only by admin
+    (or by an operator when the lab has set allow_manual_beam)."""
     specs = [
         ActionSpec(
             name="set_power", tier=ActionTier.PREPARE,
@@ -128,13 +129,16 @@ def laser_actions(att_lo: float, att_hi: float, divider_min: int,
                          "frequency, and any errors or warnings the laser reports."),
         ),
     ]
-    if allow_manual_beam:
-        # Deliberately gated behind config: opening the shutter outside an
-        # approved plan is a policy decision, not a convenience.
-        specs.append(ActionSpec(
-            name="output_on", tier=ActionTier.MOTION,
-            description="Open the shutter WITHOUT an approved plan (alignment only).",
-        ))
+    specs.append(ActionSpec(
+        name="output_on", tier=ActionTier.EXPOSE,
+        description=(
+            "Open the shutter WITHOUT an approved plan — the beam goes live. "
+            "Requires the admin role"
+            + (", or the operator role since allow_manual_beam is set."
+               if allow_manual_beam else
+               " (set labgate.allow_manual_beam to let operators do it too).")
+        ),
+    ))
     return specs
 
 

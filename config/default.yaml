@@ -68,10 +68,12 @@ labgate:
   # YAML file mapping bearer tokens -> identities/roles.
   # See config/tokens.example.yaml; never commit real tokens.
   tokens_file: "config/tokens.yaml"
-  # Policy: may the laser shutter be opened through a direct device action,
-  # outside an approved plan? Keep false unless the lab safety owner decides
-  # otherwise — with it true, alignment can fire the beam without a second
-  # person signing for it.
+  # An identity with the `admin` role can ALWAYS open the shutter directly
+  # (tier `expose`) — that is what makes bringing a rig up and testing it
+  # physically possible, and every use is audited as `beam_opened_manually`.
+  # This flag additionally lets a plain `operator` do it. Keep it false
+  # unless the lab safety owner decides otherwise: with it true, anyone with
+  # an operator token can fire the beam without a second person signing.
   allow_manual_beam: false
 
 # Camera: Hikrobot MV-CS200-10GC (20 MP GigE colour) driven by the MVS SDK.

@@ -11,10 +11,13 @@ weakened — it is made proportionate:
     read     no state change at all                  → any platform role
     prepare  connect, enable, configure; no motion   → operator
     motion   moves the stage; never opens the beam   → operator, interlocked
-    expose   opens the shutter                       → NOT reachable here
+    expose   opens the shutter                       → ADMIN ONLY
 
-`expose` exists in the enum only so that an adapter which declares such an
-action is refused loudly rather than silently permitted.
+`expose` is reachable, but only by an identity holding the `admin` role.
+That is the difference between "an operator cannot fire the laser without a
+second person signing for it" — still true — and "nobody can ever fire it
+interactively", which would make bringing up and physically testing a rig
+impossible. Admin is the rig owner; the audit trail records every use.
 """
 
 from __future__ import annotations
@@ -35,9 +38,10 @@ class ActionTier(StrEnum):
     EXPOSE = "expose"
 
 
-#: Tiers a device action may actually be invoked at. `expose` is deliberately
-#: absent: opening the shutter goes through the plan/approval path.
-INVOCABLE_TIERS = {ActionTier.READ, ActionTier.PREPARE, ActionTier.MOTION}
+#: Tiers a device action may be invoked at. `expose` is included but carries
+#: the strictest role requirement — see labgate.devicectl.TIER_ROLE.
+INVOCABLE_TIERS = {ActionTier.READ, ActionTier.PREPARE, ActionTier.MOTION,
+                   ActionTier.EXPOSE}
 
 
 class ActionSpec(BaseModel):

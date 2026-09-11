@@ -34,12 +34,18 @@ def test_every_declared_action_is_implemented(platform):
             bind(adapter, spec)  # raises if missing
 
 
-def test_no_adapter_declares_an_expose_action(platform):
-    """Opening the shutter must never be reachable from this plane."""
-    for adapter in platform.registry.adapters():
-        for spec in adapter.actions():
-            assert spec.tier is not ActionTier.EXPOSE, (
-                f"{adapter.device_id}.{spec.name} is tier 'expose'")
+def test_only_the_laser_declares_an_expose_action(platform):
+    """Exactly one thing in the system opens a shutter; nothing else may
+    quietly acquire that power."""
+    exposing = [(a.device_id, s.name) for a in platform.registry.adapters()
+                for s in a.actions() if s.tier is ActionTier.EXPOSE]
+    assert exposing == [("laser", "output_on")]
+
+
+def test_expose_tier_requires_admin():
+    from labgate.auth import Role
+    from labgate.devicectl import TIER_ROLE
+    assert TIER_ROLE[ActionTier.EXPOSE] is Role.ADMIN
 
 
 def test_sim_and_declared_bounds_are_discoverable(client):
@@ -166,20 +172,91 @@ def test_motion_refused_while_a_plan_is_running(client, good_spec):
     assert client.platform.store.get(pid).state == PlanState.COMPLETED
 
 
-def test_beam_on_not_exposed_when_policy_disabled(client):
-    _connect_all(client)
+def test_beam_on_is_always_discoverable(client):
+    """Declared so a client can see it exists and what it needs — knowing an
+    action is admin-only is more useful than it vanishing."""
     names = [a["name"] for a in
              client.get("/devices/laser/actions", headers=auth(client, "alice")).json()]
-    assert "output_on" not in names
-    assert _act(client, "laser", "output_on").status_code == 422
+    assert "output_on" in names
 
 
-def test_beam_on_appears_only_when_policy_allows(cfg):
+def test_operator_cannot_open_the_shutter(client):
+    _connect_all(client)
+    response = _act(client, "laser", "output_on")          # alice = operator
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert "admin" in detail and "plan for approval" in detail
+    assert client.platform.registry.by_kind("laser").output_on is False
+
+
+def test_admin_can_open_the_shutter(client):
+    _connect_all(client)
+    response = _act(client, "laser", "output_on", user="root")
+    assert response.status_code == 200
+    assert client.platform.registry.by_kind("laser").output_on is True
+
+
+def test_manual_beam_opens_it_to_operators_too(cfg):
     from labgate.api.app import Platform
+    from labgate.auth import Identity, Role
     cfg.allow_manual_beam = True
     platform = Platform(cfg)
-    names = [a.name for a in platform.registry.by_kind("laser").actions()]
-    assert "output_on" in names
+    platform.registry.by_kind("laser").connect()
+    operator = Identity(user_id="darina", roles={Role.OPERATOR})
+    result = platform.devicectl.invoke("laser", "output_on", {}, operator)
+    assert result.ok and platform.registry.by_kind("laser").output_on is True
+
+
+def test_opening_the_shutter_is_audited_distinctly(client):
+    _connect_all(client)
+    _act(client, "laser", "output_on", user="root")
+    events = [e for e in client.platform.audit.read_all()
+              if e["event"] == "beam_opened_manually"]
+    assert events and events[-1]["actor"] == "root"
+
+
+def test_admin_may_move_with_the_beam_live_and_it_is_recorded(client):
+    """Without this an admin could open the shutter and then be unable to
+    move — which would make physical testing impossible."""
+    _connect_all(client)
+    _act(client, "stage", "enable_axes", user="root")
+    _act(client, "laser", "output_on", user="root")
+    response = _act(client, "stage", "jog",
+                    {"axis": 0, "distance_mm": 0.1}, user="root")
+    assert response.status_code == 200
+    overrides = [e for e in client.platform.audit.read_all()
+                 if e["event"] == "interlock_override"]
+    assert overrides and overrides[-1]["payload"]["interlock"] == "blocked_when_beam_on"
+
+
+def test_operator_still_cannot_move_with_the_beam_live(client):
+    _connect_all(client)
+    client.platform.registry.by_kind("laser").output_on = True
+    assert _act(client, "stage", "jog",
+                {"axis": 0, "distance_mm": 0.1}).status_code == 502
+
+
+def test_admin_does_not_override_run_exclusivity(client, good_spec):
+    """Policy may bend for the rig owner; correctness does not. Interleaving
+    with a running plan can corrupt an exposure."""
+    _connect_all(client)
+    client.platform.registry.by_kind("stage").time_scale = 0.02
+    plan = client.post("/plans", json={"spec": good_spec.model_dump()},
+                       headers=auth(client, "alice")).json()
+    pid = plan["plan_id"]
+    client.post(f"/plans/{pid}/approve", headers=auth(client, "bob"))
+    client.post(f"/plans/{pid}/execute", headers=auth(client, "alice"))
+    response = _act(client, "stage", "jog",
+                    {"axis": 0, "distance_mm": 0.1}, user="root")
+    client.platform.engine.wait(pid, timeout_s=30)
+    assert response.status_code == 409
+
+
+def test_admin_can_always_stop(client):
+    _connect_all(client)
+    client.platform.registry.by_kind("laser").output_on = True
+    assert _act(client, "stage", "halt", user="root").status_code == 200
+    assert _act(client, "laser", "output_off", user="root").status_code == 200
 
 
 def test_unknown_state_laser_is_treated_as_beam_on(platform):

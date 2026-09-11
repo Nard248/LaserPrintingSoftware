@@ -103,7 +103,38 @@ curl -s -X POST -H "$OP" $BASE/system/estop    # abort the run and safe-state
 `halt`, `output_off` and `/system/estop` are never interlocked out. Every
 other action can be refused; a stop cannot.
 
-## 6. Then run an actual experiment
+## 6. Firing the laser by hand (admin only)
+
+Physically testing a rig means firing the beam without filing a plan first.
+That is the `expose` tier, and it needs the **`admin`** role:
+
+```bash
+ADM="Authorization: Bearer <admin token>"
+L=$BASE/devices/laser/actions
+
+curl -s -X POST -H "$ADM" -H "$JSON" \
+     -d '{"params":{"attenuator_percent":25}}' $L/set_power   # arm
+curl -s -X POST -H "$ADM" -H "$JSON" -d '{"params":{}}' $L/output_on   # BEAM LIVE
+curl -s -X POST -H "$ADM" -H "$JSON" \
+     -d '{"params":{"axis":2,"distance_mm":0.2}}' $BASE/devices/stage/actions/jog
+curl -s -X POST -H "$ADM" -H "$JSON" -d '{"params":{}}' $L/output_off
+```
+
+An **operator** token gets `403` on `output_on` and `502` on jogging while
+the beam is live. An **admin** may do both: the beam-on motion interlock is
+overridden for admin, because otherwise opening the shutter would leave the
+stage frozen and manual testing impossible.
+
+Neither is silent. Opening the shutter outside a plan writes
+`beam_opened_manually` to the audit log, and moving with the beam live writes
+`interlock_override`, both naming the person.
+
+One thing admin does **not** override: exclusivity with a running plan. That
+is a correctness invariant rather than a policy — interleaving with the
+executor can corrupt an exposure — so a device action during a run is still
+`409`. `halt` and `/system/estop` remain available to stop the run first.
+
+## 7. Then run an actual experiment
 
 Once preflight is green, the plan path is unchanged: `POST /plans` →
 `POST /plans/{id}/dry-run` → a second person approves →
@@ -120,8 +151,9 @@ Once preflight is green, the plan path is unchanged: `POST /plans` →
 | jog 6 mm when the clamp is 5 mm | `422` | interactive moves are bounded; long travel belongs in a plan |
 | jog while the beam is on | `502` | motion is interlocked against exposure |
 | jog while a plan is running | `409` | the execution engine owns the rig |
-| open the shutter directly | `422` | not exposed unless `labgate.allow_manual_beam` is set |
+| open the shutter as an operator | `403` | `expose` needs the `admin` role (or `allow_manual_beam`) |
 | jog with only the approver role | `403` | motion needs `operator` |
+| any device action, as admin, during a run | `409` | correctness, not policy — admin does not override this |
 
 An unreachable laser counts as *possibly on*, so motion is refused rather
 than allowed. That is deliberate: the conservative reading is the safe one.

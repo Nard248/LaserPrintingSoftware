@@ -196,11 +196,18 @@ def test_laser_diagnose_survives_an_unreachable_head(cfg):
     assert checks["laser.reachable"].manual is True
 
 
-def test_beam_on_action_absent_unless_policy_allows(cfg):
+def test_rig_laser_declares_output_on_as_expose(cfg):
+    from labgate.actions import ActionTier
     adapter, _ = _rig_laser(cfg, {})
-    assert "output_on" not in [a.name for a in adapter.actions()]
-    adapter._cfg.allow_manual_beam = True
-    assert "output_on" in [a.name for a in adapter.actions()]
+    spec = next(a for a in adapter.actions() if a.name == "output_on")
+    assert spec.tier is ActionTier.EXPOSE
+
+
+def test_rig_laser_output_on_drives_the_controller(cfg):
+    adapter, controller = _rig_laser(cfg, {})
+    result = adapter.act_output_on()
+    controller.on.assert_called_once()
+    assert result["output_on"] is True and adapter.output_on is True
 
 
 # ---------------------------------------------------------------- camera

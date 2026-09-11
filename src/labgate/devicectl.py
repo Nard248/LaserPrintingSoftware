@@ -6,8 +6,8 @@ deterministic set of interlocks applied before anything reaches hardware.
 Order of checks (all must pass, cheapest and most important first):
 
   1. the action exists and is declared by that device
-  2. its tier is invocable at all               (never `expose`)
-  3. the caller holds the role that tier needs
+  2. its tier is invocable at all
+  3. the caller holds the role that tier needs (`expose` = admin)
   4. the device is connected, if the action needs it
   5. no plan is running or queued               (exclusivity with the executor)
   6. the beam is off, for motion actions        (motion safety interlock)
@@ -35,11 +35,15 @@ from .auth import Identity, Role, require_role
 from .errors import AuthError, DeviceError, TransitionError, ValidationFailed
 from .registry import CapabilityRegistry
 
-#: Minimum role per tier. `expose` is absent — it is never invocable here.
+#: Minimum role per tier. `expose` — opening the shutter outside an approved
+#: plan — is admin-only: the rig owner can bring the instrument up and test it
+#: physically, while an ordinary operator still cannot fire the laser without
+#: a second person signing for a plan.
 TIER_ROLE: dict[ActionTier, Role | None] = {
     ActionTier.READ: None,              # any authenticated platform role
     ActionTier.PREPARE: Role.OPERATOR,
     ActionTier.MOTION: Role.OPERATOR,
+    ActionTier.EXPOSE: Role.ADMIN,
 }
 
 
@@ -111,16 +115,24 @@ class DeviceControl:
             raise AuthError(
                 f"action '{action}' is tier '{spec.tier}' and is not available "
                 "through device control; it must go through the plan approval path")
-        if spec.tier == ActionTier.MOTION and not spec.always_allowed \
-                and self._opens_beam(spec) and not self._allow_manual_beam:
-            raise AuthError(
-                f"action '{action}' would open the beam; manual beam control is "
-                "disabled (labgate.allow_manual_beam)")
 
-        # 3. role
+        # 3. role. `expose` needs admin — unless the lab has explicitly opened
+        # manual beam control to operators via labgate.allow_manual_beam.
         needed = TIER_ROLE.get(spec.tier)
+        if spec.tier is ActionTier.EXPOSE and self._allow_manual_beam:
+            needed = Role.OPERATOR
         if needed is not None:
-            require_role(identity, needed)
+            try:
+                require_role(identity, needed)
+            except AuthError:
+                if spec.tier is ActionTier.EXPOSE:
+                    raise AuthError(
+                        f"'{action}' opens the shutter outside an approved plan and "
+                        f"requires the '{Role.ADMIN}' role; user "
+                        f"'{identity.user_id}' has {sorted(identity.roles)}. Submit a "
+                        "plan for approval instead, or set labgate.allow_manual_beam "
+                        "to let operators do this.") from None
+                raise
         elif not (identity.has_role(Role.OPERATOR) or identity.has_role(Role.APPROVER)):
             raise AuthError(
                 f"user '{identity.user_id}' has no role granting device access")
@@ -132,21 +144,41 @@ class DeviceControl:
                 f"POST /devices/{device_id}/connect first")
 
         # 5/6. interlocks (stop paths bypass both, by design)
+        overrode_beam_interlock = False
         if not spec.always_allowed:
+            # Exclusivity with the executor is a correctness invariant, not a
+            # policy: interleaving with a running plan can corrupt an exposure.
+            # Nobody overrides it — admin included. `halt` and /system/estop
+            # remain available to stop a run.
             if spec.blocked_during_run and self._run_is_active():
                 raise TransitionError(
                     f"a plan is running or queued; '{action}' is refused while the "
                     "execution engine owns the rig (abort it first, or wait)")
             if spec.blocked_when_beam_on and self._beam_is_on():
-                raise DeviceError(
-                    f"laser output is on (or its state is unknown); '{action}' is "
-                    "refused until the beam is confirmed off")
+                # An admin who has just opened the shutter deliberately must be
+                # able to move the stage, or manual testing is impossible. The
+                # override is recorded rather than silent.
+                if identity.has_role(Role.ADMIN):
+                    overrode_beam_interlock = True
+                else:
+                    raise DeviceError(
+                        f"laser output is on (or its state is unknown); '{action}' is "
+                        "refused until the beam is confirmed off")
 
         # 7. parameters
         kwargs = coerce_and_validate(spec, params or {})
         fn = bind(adapter, spec)
 
         # 8. execute under the device lock
+        if overrode_beam_interlock:
+            self._audit.append("interlock_override", identity.user_id, {
+                "device_id": device_id, "action": action,
+                "interlock": "blocked_when_beam_on",
+                "reason": "admin moving the stage with the beam live"})
+        if spec.tier is ActionTier.EXPOSE:
+            self._audit.append("beam_opened_manually", identity.user_id, {
+                "device_id": device_id, "action": action,
+                "note": "shutter opened outside an approved plan"})
         self._audit_attempt(spec, device_id, action, identity, kwargs)
         try:
             with self._lock_for(device_id):
@@ -168,9 +200,6 @@ class DeviceControl:
         return result
 
     # ------------------------------------------------------------------
-    def _opens_beam(self, spec: ActionSpec) -> bool:
-        return spec.name in {"output_on", "beam_on", "fire"}
-
     def _audit_attempt(self, spec: ActionSpec, device_id: str, action: str,
                        identity: Identity, kwargs: dict) -> None:
         # Motion is the interesting case for forensics: record the intent
