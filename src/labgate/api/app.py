@@ -16,6 +16,7 @@ Run with:  labgate-serve  (or uvicorn "labgate.api.app:create_app" --factory)
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
@@ -41,7 +42,7 @@ from ..registry import CapabilityRegistry
 from ..results import RunResults, UnknownArtifactError
 from ..spec import ExperimentSpec
 from ..validation import ValidationEngine
-from .schemas import PlanSummary, SubmitPlanRequest
+from .schemas import InvokeActionRequest, PlanSummary, SubmitPlanRequest
 
 _DESCRIPTION = """
 Deterministic control platform for the 2PP laser fabrication rig.
@@ -87,6 +88,11 @@ class Platform:
         self.estimator = DryRunEstimator(cfg, geometry=self.geometry)
         self.engine = ExecutionEngine(self.registry, self.store, self.audit, cfg,
                                       exposure=exposure, geometry=self.geometry)
+        from ..devicectl import DeviceControl
+        self.devicectl = DeviceControl(
+            self.registry, self.audit, self.engine,
+            allow_manual_beam=cfg.allow_manual_beam)
+        self.started_at = time.time()
 
 
 from contextlib import asynccontextmanager
@@ -180,6 +186,8 @@ def create_app(cfg: LabgateConfig | None = None) -> FastAPI:
             status = 404
         elif isinstance(exc, TransitionError):
             status = 409
+        elif isinstance(exc, ValidationFailed):
+            status = 422
         elif isinstance(exc, DeviceError):
             status = 502
         return JSONResponse(status_code=status, content={"detail": str(exc)})
@@ -204,6 +212,179 @@ def create_app(cfg: LabgateConfig | None = None) -> FastAPI:
     def devices(identity: Identity = Depends(current_identity)) -> list[dict]:
         require_read(identity)
         return [s.model_dump() for s in platform.registry.device_states()]
+
+    # ------------------------------------------- device control plane
+    # Plans are for experiments: validated, approved by a second person,
+    # queued. These endpoints are the other half — bringing the rig up,
+    # aligning it, diagnosing it. Governed by risk tier (labgate.actions)
+    # rather than by approval; the shutter stays plan-only.
+
+    def _adapter_or_404(device_id: str):
+        try:
+            return platform.registry.adapter(device_id)
+        except KeyError:
+            known = sorted(a.device_id for a in platform.registry.adapters())
+            raise HTTPException(404, f"unknown device '{device_id}'; known: {known}")
+
+    @app.get("/devices/{device_id}", operation_id="getDevice",
+             summary="Get one device in detail",
+             description="Live state, declared plan capabilities and declared device actions.")
+    def device_detail(device_id: str,
+                      identity: Identity = Depends(current_identity)) -> dict:
+        require_read(identity)
+        adapter = _adapter_or_404(device_id)
+        return {
+            "state": adapter.state().model_dump(),
+            "capabilities": [c.model_dump() for c in adapter.capabilities()],
+            "actions": [a.model_dump() for a in platform.devicectl.describe(device_id)],
+        }
+
+    @app.get("/devices/{device_id}/actions", operation_id="listDeviceActions",
+             summary="List device actions",
+             description="Declared interactive actions with their tiers, parameters and bounds.")
+    def device_actions(device_id: str,
+                       identity: Identity = Depends(current_identity)) -> list[dict]:
+        require_read(identity)
+        _adapter_or_404(device_id)
+        return [a.model_dump() for a in platform.devicectl.describe(device_id)]
+
+    @app.post("/devices/{device_id}/connect", operation_id="connectDevice",
+              summary="Connect a device",
+              description="Open the link to the instrument. For the stage this also enables and commutates the servo axes.")
+    def device_connect(device_id: str,
+                       identity: Identity = Depends(current_identity)) -> dict:
+        require_role(identity, Role.OPERATOR)
+        adapter = _adapter_or_404(device_id)
+        adapter.connect()
+        platform.audit.append("device_connect", identity.user_id,
+                              {"device_id": device_id})
+        return adapter.state().model_dump()
+
+    @app.post("/devices/{device_id}/disconnect", operation_id="disconnectDevice",
+              summary="Disconnect a device",
+              description="Safe-state then release the instrument.")
+    def device_disconnect(device_id: str,
+                          identity: Identity = Depends(current_identity)) -> dict:
+        require_role(identity, Role.OPERATOR)
+        adapter = _adapter_or_404(device_id)
+        if platform.devicectl._run_is_active():
+            raise TransitionError(
+                "a plan is running or queued; disconnecting now would pull the rig "
+                "out from under it")
+        adapter.disconnect()
+        platform.audit.append("device_disconnect", identity.user_id,
+                              {"device_id": device_id})
+        return adapter.state().model_dump()
+
+    @app.post("/devices/{device_id}/diagnose", operation_id="diagnoseDevice",
+              summary="Run a device self-test",
+              description="Read-only probe of reachability, driver availability and reported health. Never actuates.")
+    def device_diagnose(device_id: str,
+                        identity: Identity = Depends(current_identity)) -> dict:
+        require_read(identity)
+        adapter = _adapter_or_404(device_id)
+        checks = adapter.diagnose()
+        blockers = [c for c in checks if not c.ok and c.severity == "blocker"]
+        return {"device_id": device_id, "ok": not blockers,
+                "checks": [c.model_dump() for c in checks]}
+
+    @app.post("/devices/{device_id}/actions/{action}", operation_id="invokeDeviceAction",
+              summary="Invoke a device action",
+              description="Run one declared action (home, jog, set_velocity, snapshot, ...). Bounds-checked, interlocked and audited.")
+    def invoke_action(device_id: str, action: str,
+                      body: InvokeActionRequest | None = None,
+                      identity: Identity = Depends(current_identity)) -> dict:
+        _adapter_or_404(device_id)
+        params = (body.params if body else {}) or {}
+        result = platform.devicectl.invoke(device_id, action, params, identity)
+        payload = result.model_dump()
+        # A snapshot returns raw image bytes; persist them and hand back a URL
+        # instead of stuffing binary into JSON.
+        image = payload.get("data", {}).pop("image_bytes", None)
+        if image:
+            name = _save_snapshot(device_id, params.get("label"), image)
+            payload["data"]["snapshot"] = name
+            payload["data"]["url"] = f"/snapshots/{name}"
+        return payload
+
+    def _save_snapshot(device_id: str, label: str | None, image: bytes) -> str:
+        import re
+        from datetime import datetime, timezone
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        raw = f"{device_id}_{label or 'snapshot'}_{stamp}"
+        name = re.sub(r"[^A-Za-z0-9_.-]", "_", raw) + ".png"
+        folder = Path(platform.cfg.storage_dir) / "snapshots"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_bytes(image)
+        return name
+
+    @app.get("/snapshots/{name}", operation_id="getSnapshot",
+             summary="Fetch a device snapshot",
+             description="Download an image captured by a camera snapshot action.")
+    def get_snapshot(name: str, identity: Identity = Depends(current_identity)):
+        require_read(identity)
+        safe = Path(name).name
+        if safe != name or not safe.endswith(".png"):
+            raise HTTPException(404, f"no snapshot named '{name}'")
+        path = Path(platform.cfg.storage_dir) / "snapshots" / safe
+        if not path.exists():
+            raise HTTPException(404, f"no snapshot named '{name}'")
+        return FileResponse(path)
+
+    # ------------------------------------------------ system diagnostics
+    @app.get("/system/status", operation_id="getSystemStatus",
+             summary="Get full system status",
+             description="Mode, version, uptime, policy, per-device rollup, queue depth and storage — everything at a glance.")
+    def system_status(identity: Identity = Depends(current_identity)) -> dict:
+        require_read(identity)
+        states = platform.registry.device_states()
+        return {
+            "version": __version__,
+            "mode": platform.cfg.mode,
+            "uptime_s": round(time.time() - platform.started_at, 1),
+            "policy": {"allow_manual_beam": platform.cfg.allow_manual_beam},
+            "devices": {
+                s.device_id: {"kind": s.kind, "connected": s.connected,
+                              "detail": s.detail}
+                for s in states
+            },
+            "devices_connected": sum(1 for s in states if s.connected),
+            "devices_total": len(states),
+            "queue": platform.engine.queue_snapshot(),
+            "plans_total": len(platform.store.list()),
+            "storage_dir": str(platform.cfg.storage_dir),
+        }
+
+    @app.get("/system/preflight", operation_id="getPreflight",
+             summary="Check readiness to run",
+             description="Aggregated readiness checklist. Each failure carries a remedy — either an API call, or a physical instruction flagged 'manual'.")
+    def system_preflight(identity: Identity = Depends(current_identity)) -> dict:
+        require_read(identity)
+        from ..preflight import run_preflight
+        report = run_preflight(platform.registry, platform.engine, platform.cfg.mode)
+        return report.model_dump()
+
+    @app.post("/system/estop", operation_id="emergencyStop",
+              summary="Emergency stop",
+              description="Immediately safe-state every device (laser first, then stage, then illumination) and abort any running plan.")
+    def emergency_stop(identity: Identity = Depends(current_identity)) -> dict:
+        require_role(identity, Role.OPERATOR)
+        platform.audit.append("estop", identity.user_id, {})
+        aborted, errors = [], []
+        snapshot = platform.engine.queue_snapshot()
+        for plan_id in filter(None, [snapshot.get("running"), *(snapshot.get("queued") or [])]):
+            try:
+                platform.engine.abort(plan_id, identity.user_id)
+                aborted.append(plan_id)
+            except Exception as exc:  # noqa: BLE001 — report, never mask
+                errors.append(f"abort {plan_id}: {exc}")
+        for adapter in platform.engine._ordered_adapters():
+            try:
+                adapter.safe_state()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{adapter.device_id}: {exc}")
+        return {"ok": not errors, "aborted_plans": aborted, "errors": errors,
+                "devices": [s.model_dump() for s in platform.registry.device_states()]}
 
     @app.post("/plans", status_code=201, operation_id="submitPlan", summary="Submit experiment plan", description="Submit a declarative Experiment Specification for validation and approval. Auto-runs validation checks.")
     def submit_plan(

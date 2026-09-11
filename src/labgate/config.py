@@ -38,6 +38,10 @@ class LabgateConfig(BaseModel):
     mode: Literal["sim", "rig"] = "sim"
     storage_dir: Path = Path("labgate_data")
     tokens_file: Path | None = None
+    #: Policy: may the shutter be opened outside an approved plan?
+    #: Default false — alignment with a live beam is a decision for the lab
+    #: safety owner, not a convenience the API grants by itself.
+    allow_manual_beam: bool = False
     bounds: Bounds = Field(default_factory=Bounds)
     # Raw hardware config (stage/laser sections of default.yaml) passed
     # through to rig adapters untouched.
@@ -51,7 +55,9 @@ class LabgateConfig(BaseModel):
         section = raw.get("labgate") or {}
         cfg = cls(**section)
         cfg.hardware = {
-            k: (raw.get(k) or {}) for k in ("stage", "laser", "synchronization") if k in raw
+            k: (raw.get(k) or {})
+            for k in ("stage", "laser", "synchronization", "camera")
+            if k in raw
         }
         stage = raw.get("stage") or {}
         if "range_mm" in stage:

@@ -25,6 +25,11 @@ class ParamSpec(BaseModel):
     min: float | None = None
     max: float | None = None
     description: str = ""
+    #: Whether a caller must supply this parameter (device actions only;
+    #: plan operations get requiredness from their pydantic models).
+    required: bool = True
+    #: Permitted values for a `str` parameter, e.g. an enum from the SDK.
+    choices: list[str] | None = None
 
 
 class Capability(BaseModel):
@@ -42,11 +47,34 @@ class DeviceState(BaseModel):
     detail: dict = Field(default_factory=dict)
 
 
+class CheckResult(BaseModel):
+    """One diagnostic finding about a device or the system as a whole."""
+
+    check: str
+    ok: bool
+    severity: Literal["blocker", "warning", "info"] = "info"
+    detail: str = ""
+    #: How a human fixes this. Either an API call the caller can make, or a
+    #: physical instruction ("turn the key switch on the laser head") for the
+    #: things no software can do for you.
+    remedy: str = ""
+    #: True when `remedy` needs hands on the instrument rather than an API call.
+    manual: bool = False
+
+
 class DeviceAdapter(ABC):
     """One adapter per physical device.
 
-    Action methods are adapter-specific (the executor holds the dispatch
-    table); this base fixes the lifecycle + introspection contract.
+    Two surfaces, deliberately separate:
+
+    * `capabilities()` — operations usable inside an *experiment plan*.
+      These fire the laser, so they are validated and human-approved.
+    * `actions()` — things you do to the device *directly* (connect, home,
+      jog, read status). Governed by risk tier rather than approval; see
+      labgate.actions. An action named "jog" is implemented by `act_jog`.
+
+    Adapters need only override `actions()`/`diagnose()` if they have
+    something to offer; the defaults are empty and harmless.
     """
 
     device_id: str
@@ -72,3 +100,18 @@ class DeviceAdapter(ABC):
         execution engine) catch, record, and continue down the safe-state
         order. Never silently report safe when the device may not be.
         """
+
+    # -- interactive control plane (optional per adapter) ----------------
+
+    def actions(self) -> list:
+        """Declared device actions. See labgate.actions.ActionSpec."""
+        return []
+
+    def diagnose(self) -> list[CheckResult]:
+        """Read-only self-test. MUST NOT actuate anything.
+
+        Probes reachability, driver availability and reported device health,
+        and says what a human should do about anything wrong.
+        """
+        return []
+

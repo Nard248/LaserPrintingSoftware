@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..lifecycle import PlanRecord
 from ..spec import ExperimentSpec
@@ -34,3 +34,9 @@ class PlanSummary(BaseModel):
             ),
             created_at=record.created_at,
         )
+
+
+class InvokeActionRequest(BaseModel):
+    """Body for POST /devices/{id}/actions/{action}."""
+
+    params: dict = Field(default_factory=dict)

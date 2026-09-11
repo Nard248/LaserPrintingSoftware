@@ -68,3 +68,23 @@ labgate:
   # YAML file mapping bearer tokens -> identities/roles.
   # See config/tokens.example.yaml; never commit real tokens.
   tokens_file: "config/tokens.yaml"
+  # Policy: may the laser shutter be opened through a direct device action,
+  # outside an approved plan? Keep false unless the lab safety owner decides
+  # otherwise — with it true, alignment can fire the beam without a second
+  # person signing for it.
+  allow_manual_beam: false
+
+# Camera: Hikrobot MV-CS200-10GC (20 MP GigE colour) driven by the MVS SDK.
+camera:
+  # Serial number or user-defined name to select when several are present.
+  # null = use the first camera the SDK enumerates.
+  serial: null
+  # Where the MVS Python bindings live. null = try MVS_PATH, then the default
+  # Windows install path.
+  sdk_path: null
+  transport: "gige"          # gige | usb | both
+  exposure_time_us: 20000.0
+  gain_db: 0.0
+  auto_exposure: "off"       # off | once | continuous
+  pixel_format: "RGB8Packed"
+  grab_timeout_ms: 10000
