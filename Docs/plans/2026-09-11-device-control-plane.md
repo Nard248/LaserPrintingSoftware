@@ -71,14 +71,28 @@ FreeImageBuffer → StopGrabbing → CloseDevice → DestroyHandle`.
 - `snapshot` is a `read` action (non-mutating) returning a PNG artifact.
 - `capture_image` plan op gains optional `exposure_time_us` / `gain` overrides.
 
-## 5. Implementation order
+## 5. Implementation status
 
-1. **A** — action framework (`actions.py`), adapter contract extension, sim adapters.
-2. **B** — device control service with the gate (`devicectl.py`), API endpoints.
-3. **C** — diagnostics + preflight + e-stop.
-4. **D** — rig adapter actions (stage/laser real).
-5. **E** — camera MVS adapter.
-6. **F** — tests, OpenAPI/Postman regeneration, docs.
+| | Phase | State |
+| --- | --- | --- |
+| A | action framework (`actions.py`), adapter contract, sim adapters | **done** |
+| B | device control gate (`devicectl.py`) + API endpoints | **done** |
+| C | diagnostics, preflight, e-stop | **done** |
+| D | rig adapter actions (real stage + laser) | **done** — awaiting on-rig verification |
+| E | camera MVS adapter | **done** — awaiting a machine with MVS installed |
+| F | tests, OpenAPI/Postman regeneration, docs | **done** — 51 new tests, 148 total |
+
+Still open, and genuinely blocked rather than merely unfinished:
+
+- **White light** has no driver — the interface is still unknown (Q-H2). Its
+  action surface is declared and it refuses to connect, so the shape is right
+  and only the body is missing.
+- **On-rig verification**: `enable_axes` issues the SPiiPlus sequence against
+  a fake in tests; the argument shapes still need one confirmation run on the
+  real controller, alongside the `halt_all` function-name probe already
+  flagged in `stage_tcp.py`.
+- **Camera on hardware**: exposure/gain limits are read from the device, so
+  the declared bounds cannot be verified until a camera is attached.
 
 ## 6. Open decisions (for Mushegh)
 
